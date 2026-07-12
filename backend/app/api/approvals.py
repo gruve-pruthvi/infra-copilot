@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,3 +57,40 @@ async def reject(approval_id: str, body: ApprovalDecision):
         raise HTTPException(404, "approval not found")
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+class BatchDecisions(BaseModel):
+    approve: list[str] = Field(default_factory=list)
+    reject: list[str] = Field(default_factory=list)
+    confirm_texts: dict[str, str] = Field(default_factory=dict)
+    reason: str | None = None
+
+
+@router.post("/batch")
+async def resolve_batch(body: BatchDecisions):
+    """Resolve several approvals in one call. `RunManager.resolve_approval`
+    already defers resume until the last sibling of a session is resolved, so
+    this is just a loop — the run resumes exactly once, on whichever call
+    resolves the final pending approval.
+    """
+    results: dict[str, dict] = {}
+    resumed = False
+    for aid in body.reject:
+        try:
+            r = await run_manager.resolve_approval(aid, approved=False, reason=body.reason or "batch reject")
+            resumed = resumed or bool(r.get("resumed"))
+            results[aid] = {"ok": True, **r}
+        except KeyError:
+            results[aid] = {"ok": False, "error": "not found"}
+        except ValueError as e:
+            results[aid] = {"ok": False, "error": str(e)}
+    for aid in body.approve:
+        try:
+            r = await run_manager.resolve_approval(aid, approved=True, confirm_text=body.confirm_texts.get(aid))
+            resumed = resumed or bool(r.get("resumed"))
+            results[aid] = {"ok": True, **r}
+        except KeyError:
+            results[aid] = {"ok": False, "error": "not found"}
+        except ValueError as e:
+            results[aid] = {"ok": False, "error": str(e)}
+    return {"resumed": resumed, "results": results}
