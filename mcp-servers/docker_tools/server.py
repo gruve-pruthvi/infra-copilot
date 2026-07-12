@@ -492,64 +492,98 @@ def _run_compose(cmd: list[str], timeout: float = 570.0) -> dict:
     return {"exit_code": 0, "output": out, "stderr": err}
 
 
+def _parse_compose_ps_output(output: str) -> dict:
+    """Parse `docker compose ps --format json` output.
+
+    Some compose versions emit one JSON array; others emit NDJSON (one object
+    per line). ``_run_compose`` also truncates stdout to the last 60,000
+    chars, which can cut a line in half. Never raise — on any parse failure
+    return the raw output so the caller still has something usable.
+    """
+    text = output.strip()
+    try:
+        if text.startswith("["):
+            services = json.loads(text)
+        else:
+            services = [json.loads(line) for line in text.splitlines() if line.strip()]
+        return {"services": services}
+    except Exception as e:  # noqa: BLE001
+        return {"services_raw": output, "parse_error": str(e)}
+
+
 @mcp.tool(annotations=READ_ONLY)
 def compose_ps(project_dir: str, file: str | None = None) -> dict:
     """List services of a compose project (docker compose ps)."""
-    cmd = _compose_base(project_dir, file)
-    if isinstance(cmd, dict):
-        return cmd
-    res = _run_compose(cmd + ["ps", "--format", "json", "--all"])
-    if res.get("error"):
-        return res
-    services = [json.loads(line) for line in res["output"].splitlines() if line.strip()]
-    return {"services": services}
+    try:
+        cmd = _compose_base(project_dir, file)
+        if isinstance(cmd, dict):
+            return cmd
+        res = _run_compose(cmd + ["ps", "--format", "json", "--all"])
+        if res.get("error"):
+            return res
+        return _parse_compose_ps_output(res["output"])
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
 
 
 @mcp.tool(annotations=READ_ONLY)
 def compose_logs(project_dir: str, service: str | None = None, tail: int = 200, file: str | None = None) -> dict:
     """Logs for a compose project or one service."""
-    cmd = _compose_base(project_dir, file)
-    if isinstance(cmd, dict):
-        return cmd
-    args = ["logs", "--no-color", "--tail", str(min(tail, 2000))]
-    if service:
-        args.append(service)
-    res = _run_compose(cmd + args)
-    if res.get("error"):
-        return res
-    return {"logs": res["output"]}
+    try:
+        cmd = _compose_base(project_dir, file)
+        if isinstance(cmd, dict):
+            return cmd
+        args = ["logs", "--no-color", "--tail", str(min(tail, 2000))]
+        if service:
+            args.append(service)
+        res = _run_compose(cmd + args)
+        if res.get("error"):
+            return res
+        return {"logs": res["output"]}
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
 
 
 @mcp.tool(annotations=MUTATING)
 def compose_up(project_dir: str, file: str | None = None, dry_run: bool = False) -> dict:
     """Start a compose project (docker compose up -d). dry_run validates and returns the resolved config."""
-    cmd = _compose_base(project_dir, file)
-    if isinstance(cmd, dict):
-        return cmd
-    if dry_run:
-        res = _run_compose(cmd + ["config"])
+    try:
+        cmd = _compose_base(project_dir, file)
+        if isinstance(cmd, dict):
+            return cmd
+        if dry_run:
+            res = _run_compose(cmd + ["config"])
+            if res.get("error"):
+                return res
+            return {"dry_run": True, "would": "up -d", "resolved_config": res["output"]}
+        res = _run_compose(cmd + ["up", "-d", "--quiet-pull"])
         if res.get("error"):
             return res
-        return {"dry_run": True, "would": "up -d", "resolved_config": res["output"]}
-    res = _run_compose(cmd + ["up", "-d", "--quiet-pull"])
-    if res.get("error"):
-        return res
-    return {"started": True, "output": res["stderr"] or res["output"], **compose_ps(project_dir, file)}
+        started: dict[str, Any] = {"started": True, "output": res["stderr"] or res["output"]}
+        ps = compose_ps(project_dir, file)
+        if not ps.get("error"):
+            started.update(ps)
+        return started
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
 
 
 @mcp.tool(annotations=DESTRUCTIVE)
 def compose_down(project_dir: str, file: str | None = None, remove_volumes: bool = False, dry_run: bool = False) -> dict:
     """Stop and remove a compose project. remove_volumes also deletes named volumes."""
-    cmd = _compose_base(project_dir, file)
-    if isinstance(cmd, dict):
-        return cmd
-    if dry_run:
-        return {"dry_run": True, "would": "down" + (" -v" if remove_volumes else ""), **compose_ps(project_dir, file)}
-    args = ["down"] + (["-v"] if remove_volumes else [])
-    res = _run_compose(cmd + args)
-    if res.get("error"):
-        return res
-    return {"stopped": True, "output": res["stderr"] or res["output"]}
+    try:
+        cmd = _compose_base(project_dir, file)
+        if isinstance(cmd, dict):
+            return cmd
+        if dry_run:
+            return {"dry_run": True, "would": "down" + (" -v" if remove_volumes else ""), **compose_ps(project_dir, file)}
+        args = ["down"] + (["-v"] if remove_volumes else [])
+        res = _run_compose(cmd + args, timeout=290.0)
+        if res.get("error"):
+            return res
+        return {"stopped": True, "output": res["stderr"] or res["output"]}
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
 
 
 if __name__ == "__main__":
