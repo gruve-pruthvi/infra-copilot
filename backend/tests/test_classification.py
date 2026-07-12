@@ -23,3 +23,7 @@ def test_compose_tools_classified():
 
 def test_exec_in_container_is_mutating():
     assert classify("docker", "exec_in_container") is Tier.MUTATING
+
+
+def test_check_connectivity_is_read():
+    assert classify("monitoring", "check_connectivity") is Tier.READ

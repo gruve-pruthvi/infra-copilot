@@ -61,6 +61,7 @@ SAFETY: dict[str, Tier] = {
     # monitoring
     "monitoring.system_overview": Tier.READ,
     "monitoring.top_processes": Tier.READ,
+    "monitoring.check_connectivity": Tier.READ,
     # backend-native tools
     "native.system_history": Tier.READ,
     "native.write_manifest": Tier.MUTATING,

@@ -7,6 +7,9 @@ backend (its in-memory ring buffer), not by this server.
 
 from __future__ import annotations
 
+import socket
+import time
+
 import psutil
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -64,6 +67,19 @@ def top_processes(by: str = "memory", limit: int = 15) -> dict:
     key = "memory_bytes" if by != "cpu" else "cpu_percent"
     procs.sort(key=lambda x: x[key], reverse=True)
     return {"by": by, "processes": procs[: max(1, min(limit, 50))]}
+
+
+@mcp.tool(annotations=READ_ONLY)
+def check_connectivity(host: str = "127.0.0.1", port: int = 5432, timeout_seconds: float = 5.0) -> dict:
+    """TCP connectivity check — use after deploying a service to verify its published port answers."""
+    start = time.monotonic()
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout_seconds):
+            return {"reachable": True, "host": host, "port": int(port),
+                    "latency_ms": round((time.monotonic() - start) * 1000, 1)}
+    except OSError as e:
+        return {"reachable": False, "host": host, "port": int(port),
+                "reason": f"{type(e).__name__}: {e}"}
 
 
 if __name__ == "__main__":
