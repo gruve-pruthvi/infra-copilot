@@ -37,6 +37,7 @@ SAFETY: dict[str, Tier] = {
     "docker.start_container": Tier.MUTATING,
     "docker.stop_container": Tier.MUTATING,
     "docker.restart_container": Tier.MUTATING,
+    "docker.exec_in_container": Tier.MUTATING,
     "docker.pull_image": Tier.MUTATING,
     "docker.create_volume": Tier.MUTATING,
     "docker.create_network": Tier.MUTATING,

@@ -356,6 +356,20 @@ def restart_container(container: str, timeout: int = 10, dry_run: bool = False) 
 
 
 @mcp.tool(annotations=MUTATING)
+def exec_in_container(container: str, command: str | list[str], workdir: str | None = None, dry_run: bool = False) -> dict:
+    """Run a command inside a running container and return exit code + output (capped)."""
+    try:
+        c = _docker().containers.get(container)
+        if dry_run:
+            return {"dry_run": True, "would": "exec", "container": c.name, "command": command, "workdir": workdir}
+        exit_code, output = c.exec_run(command, workdir=workdir, demux=False)
+        text = (output or b"").decode(errors="replace")[-60_000:]
+        return {"container": c.name, "exit_code": exit_code, "output": text}
+    except Exception as e:
+        return _err(e)
+
+
+@mcp.tool(annotations=MUTATING)
 def pull_image(image: str, dry_run: bool = False) -> dict:
     """Pull an image from a registry. May take a while for large images."""
     try:
