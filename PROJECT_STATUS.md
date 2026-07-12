@@ -94,8 +94,9 @@ Deliberate MVP deviations from the vision doc (documented decisions, not gaps):
       (approve), "why does seed-broken-postgres keep restarting?".
 - [ ] **Git repo** — not initialized (was never requested). `git init` +
       initial commit recommended before further work.
-- [ ] Chat while `awaiting_approval` is blocked (409) — resolve pending cards
-      first. A nicer UX (auto-reject + continue) is Phase 2.
+- [x] ~~Chat while `awaiting_approval` is blocked (409) — resolve pending cards
+      first.~~ Fixed in Phase 2: a new message now auto-rejects pending
+      approvals ("superseded by a new user message") and continues.
 - [ ] `agent_history` grows unbounded per session — fine for MVP, needs
       trimming/compaction for long sessions (Phase 2).
 - [ ] No auth on the backend — acceptable for localhost-only MVP; must be
