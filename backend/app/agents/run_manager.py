@@ -99,21 +99,29 @@ class RunManager:
     # -- public entry points -------------------------------------------------
 
     async def start_turn(self, session_id: str, user_text: str) -> None:
-        """Persist the user message and launch the agent turn."""
+        """Persist the user message and launch the agent turn.
+
+        If the session is `awaiting_approval`, the pending approvals are
+        auto-rejected ("superseded by a new user message") instead of blocking
+        the new message. Their denials are fed to pydantic-ai alongside the new
+        user prompt in the same `agent.run` call, so the paused turn's tool
+        calls resolve (as denied) and the new message is processed right after.
+        """
         if self.is_running(session_id):
             raise RuntimeError("a turn is already running for this session")
+        was_awaiting_approval = False
         async with session_factory() as db:
             sess = await db.get(ChatSession, session_id)
             if sess is None:
                 raise KeyError("session not found")
-            if sess.status == "awaiting_approval":
-                raise RuntimeError("session is awaiting approval — approve or reject the pending action first")
+            was_awaiting_approval = sess.status == "awaiting_approval"
             db.add(Message(session_id=session_id, role="user", content=user_text))
             if sess.title == "New session":
                 sess.title = user_text[:60]
             sess.status = "running"
             await db.commit()
-        self._launch(session_id, user_prompt=user_text)
+        deferred = await self._reject_pending(session_id) if was_awaiting_approval else None
+        self._launch(session_id, user_prompt=user_text, deferred_results=deferred)
 
     async def cancel(self, session_id: str) -> bool:
         task = self._tasks.get(session_id)
@@ -152,11 +160,7 @@ class RunManager:
 
             sess = await db.get(ChatSession, row.session_id)
             pending_ids: list[str] = json.loads(sess.pending_call_ids or "[]")
-            rows = (
-                (await db.execute(select(Approval).where(Approval.session_id == row.session_id, Approval.tool_call_id.in_(pending_ids))))
-                .scalars()
-                .all()
-            )
+            rows = await self._approvals_for(db, row.session_id, pending_ids)
         bus.publish("approval_resolved", {"id": approval_id, "status": row.status, "session_id": row.session_id})
 
         unresolved = [r for r in rows if r.status == "pending"]
@@ -180,6 +184,48 @@ class RunManager:
         return {"resumed": True}
 
     # -- internals -----------------------------------------------------------
+
+    @staticmethod
+    async def _approvals_for(db: Any, session_id: str, call_ids: list[str]) -> list[Approval]:
+        """Load the sibling approvals for a paused turn (shared by resolve_approval and _reject_pending)."""
+        if not call_ids:
+            return []
+        rows = (
+            (await db.execute(select(Approval).where(Approval.session_id == session_id, Approval.tool_call_id.in_(call_ids))))
+            .scalars()
+            .all()
+        )
+        return rows
+
+    async def _reject_pending(self, session_id: str) -> DeferredToolResults | None:
+        """Reject every still-pending approval for the session; return denials (and any
+        already-decided sibling results) to feed the paused turn's tool calls.
+        """
+        now = datetime.now(timezone.utc)
+        async with session_factory() as db:
+            sess = await db.get(ChatSession, session_id)
+            call_ids: list[str] = json.loads(sess.pending_call_ids or "[]") if sess else []
+            if not call_ids:
+                return None
+            rows = await self._approvals_for(db, session_id, call_ids)
+            for ap in rows:
+                if ap.status == "pending":
+                    ap.status = "rejected"
+                    ap.resolved_at = now
+                    ap.reject_reason = "superseded by a new user message"
+            if sess is not None:
+                sess.pending_call_ids = None
+            await db.commit()
+
+        results = DeferredToolResults()
+        for ap in rows:
+            if ap.status == "approved":
+                results.approvals[ap.tool_call_id] = ToolApproved()
+            else:
+                msg = ap.reject_reason or ("approval expired" if ap.status == "expired" else "The user rejected this action.")
+                results.approvals[ap.tool_call_id] = ToolDenied(message=f"Denied: {msg}")
+            bus.publish("approval_resolved", {"id": ap.id, "status": ap.status, "session_id": session_id})
+        return results
 
     def _launch(self, session_id: str, user_prompt: str | None = None, deferred_results: DeferredToolResults | None = None) -> None:
         bcast = self.broadcaster(session_id)

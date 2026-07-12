@@ -258,3 +258,37 @@ async def test_batch_endpoint_reject_wins_if_id_in_both(session_id, monkeypatch)
             .all()
         )
         assert actions == [], "rejected tool must never be executed even if id is in both lists"
+
+
+async def test_new_message_auto_rejects_pending(session_id, monkeypatch):
+    """A new user message while a turn is `awaiting_approval` must not 409. Instead,
+    the pending approval(s) are auto-rejected ("superseded by a new user message")
+    and their denials are fed to pydantic-ai alongside the new prompt in one
+    combined `agent.run` call. Because the message history already contains the
+    paused turn's `ModelResponse`, TestModel's "call all tools once" guard does not
+    fire again on the follow-up step, so the new turn completes with plain text
+    (session ends "idle") rather than pausing on a fresh approval.
+    """
+    from app.agents import run_manager as rm
+
+    _install_fake_agent(monkeypatch, call_tools=["stop_container"])
+    queue = rm.run_manager.broadcaster(session_id).subscribe()
+
+    await rm.run_manager.start_turn(session_id, "stop seed-nginx")
+    events = await _drain_until(queue, {"turn_paused", "done", "error"})
+    assert events[-1]["type"] == "turn_paused", events
+    approval_id = next(e["approval"]["id"] for e in events if e["type"] == "approval_required")
+
+    # New message instead of resolving the approval — must NOT raise.
+    await rm.run_manager.start_turn(session_id, "actually, never mind — just list containers")
+    events2 = await _drain_until(queue, {"turn_paused", "done", "error"})
+    assert events2[-1]["type"] == "done", events2
+
+    async with session_factory() as db:
+        ap = await db.get(Approval, approval_id)
+        assert ap.status == "rejected"
+        assert "superseded" in (ap.reject_reason or "")
+
+    async with session_factory() as db:
+        sess = await db.get(ChatSession, session_id)
+        assert sess.status == "idle"  # TestModel's follow-up turn calls no mutating tool, so it completes

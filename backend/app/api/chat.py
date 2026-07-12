@@ -45,6 +45,8 @@ async def send_message(session_id: str, body: MessageIn):
         bcast.unsubscribe(queue)
         raise HTTPException(404, "session not found")
     except RuntimeError as e:
+        # Only the concurrent-run guard raises here now — a session `awaiting_approval`
+        # no longer 409s: start_turn auto-rejects the pending approval(s) and continues.
         bcast.unsubscribe(queue)
         raise HTTPException(409, str(e))
     return StreamingResponse(_drain(queue, bcast), media_type="text/event-stream")
