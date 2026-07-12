@@ -12,3 +12,10 @@ def test_timeout_default_matches_settings():
 
 def test_timeout_override_for_pull_image():
     assert timeout_for("docker", "pull_image") == 600.0
+
+
+def test_compose_tools_classified():
+    assert classify("docker", "compose_ps") is Tier.READ
+    assert classify("docker", "compose_logs") is Tier.READ
+    assert classify("docker", "compose_up") is Tier.MUTATING
+    assert classify("docker", "compose_down") is Tier.DESTRUCTIVE

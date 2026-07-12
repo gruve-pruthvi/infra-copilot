@@ -9,7 +9,9 @@ has already been authorized, but still never acts when dry_run=True.
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import docker
@@ -458,6 +460,96 @@ def prune_volumes(dry_run: bool = False) -> dict:
         return {"removed": res.get("VolumesDeleted") or [], "reclaimed_bytes": res.get("SpaceReclaimed", 0)}
     except Exception as e:  # noqa: BLE001
         return _err(e)
+
+
+
+# --------------------------------------------------------------------------
+# Docker Compose tools
+# --------------------------------------------------------------------------
+
+
+def _compose_base(project_dir: str, file: str | None) -> list[str] | dict:
+    d = Path(project_dir).expanduser()
+    if not d.is_dir():
+        return {"error": True, "type": "NotADirectory", "message": f"{project_dir} is not a directory"}
+    cmd = ["docker", "compose", "--project-directory", str(d)]
+    if file:
+        cmd += ["-f", str(Path(file).expanduser())]
+    return cmd
+
+
+def _run_compose(cmd: list[str], timeout: float = 570.0) -> dict:
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        return {"error": True, "type": "DockerCLIMissing", "message": "docker CLI not found on PATH"}
+    except subprocess.TimeoutExpired:
+        return {"error": True, "type": "Timeout", "message": f"compose command exceeded {timeout}s"}
+    out = (p.stdout or "")[-60_000:]
+    err = (p.stderr or "")[-20_000:]
+    if p.returncode != 0:
+        return {"error": True, "type": "ComposeError", "message": err or out, "exit_code": p.returncode}
+    return {"exit_code": 0, "output": out, "stderr": err}
+
+
+@mcp.tool(annotations=READ_ONLY)
+def compose_ps(project_dir: str, file: str | None = None) -> dict:
+    """List services of a compose project (docker compose ps)."""
+    cmd = _compose_base(project_dir, file)
+    if isinstance(cmd, dict):
+        return cmd
+    res = _run_compose(cmd + ["ps", "--format", "json", "--all"])
+    if res.get("error"):
+        return res
+    services = [json.loads(line) for line in res["output"].splitlines() if line.strip()]
+    return {"services": services}
+
+
+@mcp.tool(annotations=READ_ONLY)
+def compose_logs(project_dir: str, service: str | None = None, tail: int = 200, file: str | None = None) -> dict:
+    """Logs for a compose project or one service."""
+    cmd = _compose_base(project_dir, file)
+    if isinstance(cmd, dict):
+        return cmd
+    args = ["logs", "--no-color", "--tail", str(min(tail, 2000))]
+    if service:
+        args.append(service)
+    res = _run_compose(cmd + args)
+    if res.get("error"):
+        return res
+    return {"logs": res["output"]}
+
+
+@mcp.tool(annotations=MUTATING)
+def compose_up(project_dir: str, file: str | None = None, dry_run: bool = False) -> dict:
+    """Start a compose project (docker compose up -d). dry_run validates and returns the resolved config."""
+    cmd = _compose_base(project_dir, file)
+    if isinstance(cmd, dict):
+        return cmd
+    if dry_run:
+        res = _run_compose(cmd + ["config"])
+        if res.get("error"):
+            return res
+        return {"dry_run": True, "would": "up -d", "resolved_config": res["output"]}
+    res = _run_compose(cmd + ["up", "-d", "--quiet-pull"])
+    if res.get("error"):
+        return res
+    return {"started": True, "output": res["stderr"] or res["output"], **compose_ps(project_dir, file)}
+
+
+@mcp.tool(annotations=DESTRUCTIVE)
+def compose_down(project_dir: str, file: str | None = None, remove_volumes: bool = False, dry_run: bool = False) -> dict:
+    """Stop and remove a compose project. remove_volumes also deletes named volumes."""
+    cmd = _compose_base(project_dir, file)
+    if isinstance(cmd, dict):
+        return cmd
+    if dry_run:
+        return {"dry_run": True, "would": "down" + (" -v" if remove_volumes else ""), **compose_ps(project_dir, file)}
+    args = ["down"] + (["-v"] if remove_volumes else [])
+    res = _run_compose(cmd + args)
+    if res.get("error"):
+        return res
+    return {"stopped": True, "output": res["stderr"] or res["output"]}
 
 
 if __name__ == "__main__":

@@ -30,6 +30,8 @@ SAFETY: dict[str, Tier] = {
     "docker.list_networks": Tier.READ,
     "docker.docker_disk_usage": Tier.READ,
     "docker.docker_events_recent": Tier.READ,
+    "docker.compose_ps": Tier.READ,
+    "docker.compose_logs": Tier.READ,
     # docker — mutating
     "docker.run_container": Tier.MUTATING,
     "docker.start_container": Tier.MUTATING,
@@ -38,12 +40,14 @@ SAFETY: dict[str, Tier] = {
     "docker.pull_image": Tier.MUTATING,
     "docker.create_volume": Tier.MUTATING,
     "docker.create_network": Tier.MUTATING,
+    "docker.compose_up": Tier.MUTATING,
     # docker — destructive
     "docker.remove_container": Tier.DESTRUCTIVE,
     "docker.remove_image": Tier.DESTRUCTIVE,
     "docker.remove_volume": Tier.DESTRUCTIVE,
     "docker.prune_images": Tier.DESTRUCTIVE,
     "docker.prune_volumes": Tier.DESTRUCTIVE,
+    "docker.compose_down": Tier.DESTRUCTIVE,
     # k8s — read-only in MVP
     "k8s.list_contexts": Tier.READ,
     "k8s.list_namespaces": Tier.READ,
@@ -69,6 +73,8 @@ def classify(server: str, tool: str) -> Tier:
 # Per-tool timeout overrides in seconds. Anything absent uses the global default.
 TIMEOUTS: dict[str, float] = {
     "docker.pull_image": 600.0,
+    "docker.compose_up": 600.0,
+    "docker.compose_down": 300.0,
 }
 
 
