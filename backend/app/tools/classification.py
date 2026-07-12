@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import enum
 
+from ..config import settings
+
 
 class Tier(str, enum.Enum):
     READ = "read"
@@ -62,3 +64,13 @@ SAFETY: dict[str, Tier] = {
 
 def classify(server: str, tool: str) -> Tier:
     return SAFETY.get(f"{server}.{tool}", Tier.DESTRUCTIVE)
+
+
+# Per-tool timeout overrides in seconds. Anything absent uses the global default.
+TIMEOUTS: dict[str, float] = {
+    "docker.pull_image": 600.0,
+}
+
+
+def timeout_for(server: str, tool: str) -> float:
+    return TIMEOUTS.get(f"{server}.{tool}", settings.tool_timeout_seconds)

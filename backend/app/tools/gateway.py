@@ -31,7 +31,7 @@ from ..db.database import session_factory
 from ..db.models import Action, Approval
 from ..services.event_bus import bus
 from ..services.settings_store import store
-from .classification import Tier, classify
+from .classification import Tier, classify, timeout_for
 
 SECRET_KEY_RE = re.compile(r"(?i)(password|secret|token|api_key|apikey|access_key|private_key)")
 
@@ -116,14 +116,15 @@ class ToolGateway:
         status = "dry_run" if effective_args.get("dry_run") else "executed"
         result: Any = None
         error: str | None = None
+        actual_timeout = timeout_for(server, tool)
         try:
-            result = await asyncio.wait_for(executor(effective_args), timeout=settings.tool_timeout_seconds)
+            result = await asyncio.wait_for(executor(effective_args), timeout=actual_timeout)
             result = redact(result) if isinstance(result, (dict, list)) else result
             return result
         except ApprovalRequired:
             raise
         except asyncio.TimeoutError:
-            status, error = "failed", f"tool call timed out after {settings.tool_timeout_seconds}s"
+            status, error = "failed", f"tool call timed out after {actual_timeout}s"
             result = {"error": True, "message": error}
             return result
         except Exception as e:  # noqa: BLE001
