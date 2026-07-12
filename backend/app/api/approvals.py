@@ -85,6 +85,9 @@ async def resolve_batch(body: BatchDecisions):
         except ValueError as e:
             results[aid] = {"ok": False, "error": str(e)}
     for aid in body.approve:
+        # Reject wins for ids listed in both; skip if already processed by reject loop
+        if aid in results:
+            continue
         try:
             r = await run_manager.resolve_approval(aid, approved=True, confirm_text=body.confirm_texts.get(aid))
             resumed = resumed or bool(r.get("resumed"))

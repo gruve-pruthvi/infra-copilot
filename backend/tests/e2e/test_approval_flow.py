@@ -211,3 +211,50 @@ async def test_batch_endpoint_resolves_and_resumes_once(session_id, monkeypatch)
             .all()
         )
         assert restart_actions == [], "rejected tool must never be executed"
+
+
+async def test_batch_endpoint_reject_wins_if_id_in_both(session_id, monkeypatch):
+    """When the same approval id appears in both approve and reject lists, reject
+    wins: the reject loop processes it first, then the approve loop skips it.
+    Ensures the result is ok:True and the DB shows rejected status.
+    """
+    from app.agents import run_manager as rm
+    from app.main import app
+
+    _install_fake_agent(monkeypatch, call_tools=["stop_container"])
+
+    queue = rm.run_manager.broadcaster(session_id).subscribe()
+    await rm.run_manager.start_turn(session_id, "stop the idle container")
+    events = await _drain_until(queue, {"turn_paused", "done", "error"})
+    assert events[-1]["type"] == "turn_paused", events
+
+    approval = next(e for e in events if e["type"] == "approval_required")["approval"]
+    approval_id = approval["id"]
+
+    # Call batch endpoint with the same id in both approve and reject
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/approvals/batch",
+            json={"approve": [approval_id], "reject": [approval_id], "reason": "reject wins"},
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["resumed"] is True, body
+    # Reject wins: result should be ok:True (reject loop succeeded)
+    assert body["results"][approval_id]["ok"] is True, body
+
+    events2 = await _drain_until(queue, {"done", "error"})
+    assert events2[-1]["type"] == "done", events2
+
+    # DB should show rejected status (reject loop processed it)
+    async with session_factory() as db:
+        row = await db.get(Approval, approval_id)
+        assert row.status == "rejected" and row.reject_reason == "reject wins"
+        # Tool must not be executed (rejection prevents it)
+        actions = (
+            (await db.execute(select(Action).where(Action.session_id == session_id, Action.tool == "stop_container")))
+            .scalars()
+            .all()
+        )
+        assert actions == [], "rejected tool must never be executed even if id is in both lists"
