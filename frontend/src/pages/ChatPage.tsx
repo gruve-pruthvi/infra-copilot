@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Markdownish } from "../components/Markdownish";
 import { PlanApprovalCard } from "../components/chat/PlanApprovalCard";
@@ -123,6 +123,64 @@ function TranscriptItemView({ item }: { item: TranscriptItem }) {
         </div>
       );
   }
+}
+
+function BatchApprovalBar() {
+  const items = useChatStore((s) => s.items);
+  const batchResolve = useChatStore((s) => s.batchResolve);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const pending = items.filter(
+    (it): it is Extract<TranscriptItem, { kind: "approval" }> =>
+      it.kind === "approval" && !it.resolved,
+  );
+  if (pending.length < 2) return null;
+
+  const nonDestructiveIds = pending
+    .filter((it) => it.approval.tier !== "destructive")
+    .map((it) => it.approval.id);
+  const allIds = pending.map((it) => it.approval.id);
+
+  const run = async (approve: string[], reject: string[]) => {
+    setBusy(true);
+    setError(null);
+    const err = await batchResolve(approve, reject);
+    if (err) setError(err);
+    setBusy(false);
+  };
+
+  return (
+    <div className="mx-3 mb-2 flex flex-wrap items-center gap-2 rounded border border-edge bg-panel px-3 py-2 text-xs">
+      <span className="text-dim">
+        {pending.length} approvals pending
+        {nonDestructiveIds.length < pending.length && (
+          <span className="text-faint"> — destructive ones need individual confirmation</span>
+        )}
+      </span>
+      {error && <span className="text-danger">{error}</span>}
+      <div className="ml-auto flex shrink-0 items-center gap-2">
+        {nonDestructiveIds.length > 0 && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void run(nonDestructiveIds, [])}
+            className="rounded border border-ok/50 bg-ok/10 px-2 py-1 text-xs text-ok hover:bg-ok/20 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Approve all non-destructive ({nonDestructiveIds.length})
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void run([], allIds)}
+          className="rounded border border-danger/50 bg-danger/10 px-2 py-1 text-xs text-danger hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Reject all ({allIds.length})
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function Composer() {
@@ -253,6 +311,7 @@ export function ChatPage() {
             <div ref={bottomRef} />
           </div>
         </div>
+        <BatchApprovalBar />
         <Composer />
       </div>
     </div>

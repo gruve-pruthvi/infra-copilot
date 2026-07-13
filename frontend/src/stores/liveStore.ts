@@ -27,13 +27,13 @@ interface LiveState {
   liveActions: ActionRecord[];
   sessionStatus: Record<string, string>;
   health: HealthView | null;
-  toastApproval: PendingApproval | null;
+  toastQueue: PendingApproval[];
 
   handleFrame: (topic: string, payload: unknown) => void;
   seedSystemHistory: (points: HistoryPoint[]) => void;
   setHealth: (h: HealthView) => void;
   removePendingApproval: (id: string) => void;
-  dismissToast: () => void;
+  dismissToast: (id: string) => void;
 }
 
 function trimHistory(points: HistoryPoint[]): HistoryPoint[] {
@@ -56,7 +56,7 @@ export const useLiveStore = create<LiveState>((set) => ({
   liveActions: [],
   sessionStatus: {},
   health: null,
-  toastApproval: null,
+  toastQueue: [],
 
   handleFrame: (topic, payload) => {
     switch (topic) {
@@ -94,18 +94,19 @@ export const useLiveStore = create<LiveState>((set) => ({
       }
       case "approval_pending": {
         const a = payload as PendingApproval;
-        set((s) =>
-          s.pendingApprovals.some((x) => x.id === a.id)
-            ? s
-            : { pendingApprovals: [...s.pendingApprovals, a], toastApproval: a },
-        );
+        set((s) => ({
+          pendingApprovals: s.pendingApprovals.some((x) => x.id === a.id)
+            ? s.pendingApprovals
+            : [...s.pendingApprovals, a],
+          toastQueue: s.toastQueue.some((x) => x.id === a.id) ? s.toastQueue : [...s.toastQueue, a],
+        }));
         break;
       }
       case "approval_resolved": {
         const r = payload as { id: string; status: string; session_id: string };
         set((s) => ({
           pendingApprovals: s.pendingApprovals.filter((x) => x.id !== r.id),
-          toastApproval: s.toastApproval?.id === r.id ? null : s.toastApproval,
+          toastQueue: s.toastQueue.filter((x) => x.id !== r.id),
         }));
         useChatStore.getState().onApprovalResolved(r.id, r.status);
         break;
@@ -133,7 +134,7 @@ export const useLiveStore = create<LiveState>((set) => ({
   removePendingApproval: (id) =>
     set((s) => ({
       pendingApprovals: s.pendingApprovals.filter((x) => x.id !== id),
-      toastApproval: s.toastApproval?.id === id ? null : s.toastApproval,
+      toastQueue: s.toastQueue.filter((x) => x.id !== id),
     })),
-  dismissToast: () => set({ toastApproval: null }),
+  dismissToast: (id) => set((s) => ({ toastQueue: s.toastQueue.filter((x) => x.id !== id) })),
 }));
