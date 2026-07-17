@@ -39,8 +39,8 @@ interface ChatState {
   send: (content: string) => Promise<void>;
   cancel: () => Promise<void>;
   attachStream: () => Promise<void>;
-  approve: (approvalId: string, confirmText?: string) => Promise<string | null>;
-  reject: (approvalId: string, reason?: string) => Promise<string | null>;
+  approve: (approval: { id: string; session_id: string }, confirmText?: string) => Promise<string | null>;
+  reject: (approval: { id: string; session_id: string }, reason?: string) => Promise<string | null>;
   batchResolve: (
     approve: string[],
     reject: string[],
@@ -280,28 +280,28 @@ export const useChatStore = create<ChatState>((set, get) => {
       await runStream(id, `/api/sessions/${id}/stream`);
     },
 
-    approve: async (approvalId, confirmText) => {
+    approve: async (approval, confirmText) => {
       try {
         const res = await api.post<{ resumed: boolean; waiting_on?: number }>(
-          `/api/approvals/${approvalId}/approve`,
+          `/api/approvals/${approval.id}/approve`,
           confirmText ? { confirm_text: confirmText } : {},
         );
-        markApproval(approvalId, "approved");
-        if (res.resumed) void get().attachStream();
+        if (approval.session_id === get().currentId) markApproval(approval.id, "approved");
+        if (res.resumed && approval.session_id === get().currentId) void get().attachStream();
         return null;
       } catch (e) {
         return errorMessage(e);
       }
     },
 
-    reject: async (approvalId, reason) => {
+    reject: async (approval, reason) => {
       try {
         const res = await api.post<{ resumed: boolean }>(
-          `/api/approvals/${approvalId}/reject`,
+          `/api/approvals/${approval.id}/reject`,
           reason ? { reason } : {},
         );
-        markApproval(approvalId, "rejected");
-        if (res.resumed) void get().attachStream();
+        if (approval.session_id === get().currentId) markApproval(approval.id, "rejected");
+        if (res.resumed && approval.session_id === get().currentId) void get().attachStream();
         return null;
       } catch (e) {
         return errorMessage(e);
@@ -309,6 +309,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     batchResolve: async (approve, reject, confirmTexts = {}) => {
+      const sessionId = get().currentId;
       try {
         const res = await api.post<{
           resumed: boolean;
@@ -316,7 +317,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         }>("/api/approvals/batch", { approve, reject, confirm_texts: confirmTexts });
         for (const id of approve) if (res.results[id]?.ok) get().onApprovalResolved(id, "approved");
         for (const id of reject) if (res.results[id]?.ok) get().onApprovalResolved(id, "rejected");
-        if (res.resumed) void get().attachStream();
+        if (res.resumed && sessionId === get().currentId) void get().attachStream();
         return null;
       } catch (e) {
         return errorMessage(e);

@@ -104,12 +104,12 @@ function TranscriptItemView({ item }: { item: TranscriptItem }) {
             approval={item.approval}
             resolved={item.resolved}
             onApprove={async (confirmText) => {
-              const err = await approve(item.approval.id, confirmText);
+              const err = await approve(item.approval, confirmText);
               if (!err) removePending(item.approval.id);
               return err;
             }}
             onReject={async () => {
-              const err = await reject(item.approval.id);
+              const err = await reject(item.approval);
               if (!err) removePending(item.approval.id);
               return err;
             }}

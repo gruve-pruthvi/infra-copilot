@@ -55,12 +55,12 @@ export function ApprovalToast() {
             approval={approval}
             resolved={resolvedIds[approval.id]}
             onApprove={async (confirmText) => {
-              const err = await useChatStore.getState().approve(approval.id, confirmText);
+              const err = await useChatStore.getState().approve(approval, confirmText);
               if (!err) setResolvedIds((m) => ({ ...m, [approval.id]: "approved" }));
               return err;
             }}
             onReject={async () => {
-              const err = await useChatStore.getState().reject(approval.id);
+              const err = await useChatStore.getState().reject(approval);
               if (!err) setResolvedIds((m) => ({ ...m, [approval.id]: "rejected" }));
               return err;
             }}
