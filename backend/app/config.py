@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     monitor_interval_seconds: float = 5.0    # docker + system snapshot cadence
     k8s_interval_seconds: float = 15.0       # k8s snapshot cadence
     history_window_minutes: int = 60         # in-memory metrics retention
+    history_char_budget: int = 400_000       # agent message history character budget
 
     model_config = {"env_prefix": "INFRA_COPILOT_"}
 

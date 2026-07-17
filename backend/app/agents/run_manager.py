@@ -38,6 +38,7 @@ from ..tools.classification import SAFETY, Tier
 from ..tools.gateway import args_hash, redact
 from .copilot import build_agent
 from .deps import RunDeps
+from .history import trim_history
 
 log = logging.getLogger(__name__)
 
@@ -419,7 +420,9 @@ class RunManager:
         if sess and sess.agent_history:
             from pydantic_ai.messages import ModelMessagesTypeAdapter
 
-            return ModelMessagesTypeAdapter.validate_json(sess.agent_history)
+            msgs = ModelMessagesTypeAdapter.validate_json(sess.agent_history)
+            msgs = trim_history(msgs, settings.history_char_budget)
+            return msgs
         return None
 
     async def _save_history(self, session_id: str, history_json: bytes) -> None:
