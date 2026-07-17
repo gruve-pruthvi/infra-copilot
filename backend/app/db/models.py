@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import ForeignKey, Index, Text
+from sqlalchemy import ForeignKey, Index, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -93,6 +93,26 @@ class Setting(Base):
     key: Mapped[str] = mapped_column(primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+class Recommendation(Base):
+    """Deterministic cost/waste finding surfaced on the dashboard.
+
+    Populated by the scheduled scanner (`services/recommendations.py`) and by
+    the restart-loop detector (Task 10) via `RecommendationService.record`.
+    """
+
+    __tablename__ = "recommendations"
+    __table_args__ = (UniqueConstraint("kind", "resource", name="uq_reco_kind_resource"),)
+
+    id: Mapped[str] = mapped_column(primary_key=True, default=_uuid)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+    kind: Mapped[str] = mapped_column()  # idle_container|dangling_image|orphan_volume|exited_container|restart_loop
+    resource: Mapped[str] = mapped_column()  # container/image/volume name
+    detail: Mapped[str] = mapped_column(Text, default="{}")  # JSON
+    status: Mapped[str] = mapped_column(default="active")  # active|dismissed|resolved
+    dismissed_at: Mapped[datetime | None] = mapped_column(default=None)
 
 
 Index("ix_approvals_session_status", Approval.session_id, Approval.status)

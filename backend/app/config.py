@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     history_window_minutes: int = 60         # in-memory metrics retention
     history_char_budget: int = 400_000       # agent message history character budget
 
+    cost_scan_interval_hours: float = 24.0   # deterministic waste-scan cadence
+
     model_config = {"env_prefix": "INFRA_COPILOT_"}
 
     @property
