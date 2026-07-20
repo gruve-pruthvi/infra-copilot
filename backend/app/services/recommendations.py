@@ -9,12 +9,14 @@ for the idle-container heuristic — it does not go through MCP.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from datetime import datetime, timezone
 
 import docker
 from sqlalchemy import select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from ..config import settings
 from ..db.database import session_factory
@@ -43,6 +45,8 @@ class RecommendationService:
     async def stop(self) -> None:
         if self._task:
             self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
 
     async def _loop(self) -> None:
         await asyncio.sleep(60)  # let monitor warm up first
@@ -126,44 +130,65 @@ class RecommendationService:
 
         Unlike `_store`, this never resolves other rows -- it's a one-off
         finding outside the periodic full scan.
+
+        Uses a single atomic `INSERT ... ON CONFLICT DO UPDATE` against the
+        `uq_reco_kind_resource` unique constraint instead of SELECT-then-insert:
+        two callers racing on the same (kind, resource) can no longer 500 with
+        an IntegrityError, and a dismissed row is left untouched (the `WHERE`
+        clause on the DO UPDATE makes it a no-op when status == "dismissed").
         """
         now = datetime.now(timezone.utc)
         async with session_factory() as db:
-            row = (
-                await db.execute(
-                    select(Recommendation).where(Recommendation.kind == kind, Recommendation.resource == resource)
-                )
-            ).scalar_one_or_none()
-            if row is None:
-                db.add(Recommendation(kind=kind, resource=resource, detail=json.dumps(detail)))
-            elif row.status != "dismissed":
-                row.status = "active"
-                row.detail = json.dumps(detail)
-                row.updated_at = now
+            await db.execute(self._upsert_stmt(kind, resource, detail, now))
             await db.commit()
         await self._publish()
 
     async def _store(self, findings: list[dict]) -> None:
-        """Full-scan semantics: upsert findings, resolve active rows no longer found."""
+        """Full-scan semantics: upsert findings, resolve active rows no longer found.
+
+        Each finding is upserted with an atomic `INSERT ... ON CONFLICT DO
+        UPDATE` (see `_upsert_stmt`) rather than SELECT-then-insert, so a
+        manual `POST /api/recommendations/scan` racing the background loop on
+        the same (kind, resource) can't raise IntegrityError and roll back the
+        whole batch -- each finding commits (or no-ops onto a dismissed row)
+        independently of the others.
+        """
         seen = {(f["kind"], f["resource"]) for f in findings}
         now = datetime.now(timezone.utc)
         async with session_factory() as db:
-            existing = (await db.execute(select(Recommendation))).scalars().all()
-            by_key = {(r.kind, r.resource): r for r in existing}
             for f in findings:
-                row = by_key.get((f["kind"], f["resource"]))
-                if row is None:
-                    db.add(Recommendation(kind=f["kind"], resource=f["resource"], detail=json.dumps(f["detail"])))
-                elif row.status != "dismissed":
-                    row.status = "active"
-                    row.detail = json.dumps(f["detail"])
-                    row.updated_at = now
-            for (kind, resource), row in by_key.items():
-                if kind in SCAN_KINDS and (kind, resource) not in seen and row.status == "active":
+                await db.execute(self._upsert_stmt(f["kind"], f["resource"], f["detail"], now))
+
+            existing = (await db.execute(select(Recommendation))).scalars().all()
+            for row in existing:
+                if row.kind in SCAN_KINDS and (row.kind, row.resource) not in seen and row.status == "active":
                     row.status = "resolved"
                     row.updated_at = now
             await db.commit()
         await self._publish()
+
+    @staticmethod
+    def _upsert_stmt(kind: str, resource: str, detail: dict, now: datetime):
+        """`INSERT ... ON CONFLICT (kind, resource) DO UPDATE` for one finding.
+
+        On conflict, the row is refreshed to "active" with the new detail --
+        unless it's currently "dismissed", in which case the `WHERE` clause
+        makes the DO UPDATE a no-op (SQLite leaves the row untouched rather
+        than erroring), so dismissed rows never get silently reactivated by a
+        rescan or a racing `record()` call.
+        """
+        stmt = sqlite_insert(Recommendation).values(
+            kind=kind,
+            resource=resource,
+            detail=json.dumps(detail),
+            status="active",
+            updated_at=now,
+        )
+        return stmt.on_conflict_do_update(
+            index_elements=["kind", "resource"],
+            set_={"status": "active", "detail": stmt.excluded.detail, "updated_at": now},
+            where=Recommendation.status != "dismissed",
+        )
 
     async def _publish(self) -> None:
         async with session_factory() as db:
