@@ -174,7 +174,10 @@ class MonitorService:
             bus.publish("containers_snapshot", {"available": self.docker_available, "error": self.docker_error, "containers": self.containers})
             bus.publish("system_metrics", self.system)
             if self.docker_available:
-                await self._check_restart_loops()
+                try:
+                    await self._check_restart_loops()
+                except Exception:  # noqa: BLE001
+                    log.exception("restart-loop detection failed")
             await asyncio.sleep(settings.monitor_interval_seconds)
 
     async def _check_restart_loops(self) -> None:
@@ -187,6 +190,18 @@ class MonitorService:
                 count = len([t for t in self._restart_events[name] if now - t <= 300])
                 bus.publish("alert", {"kind": "restart_loop", "container": name, "restarts_5m": count})
                 await recommendations.record("restart_loop", name, {"restarts_5m": count})
+
+        # Prune stale tracker entries for containers that no longer exist
+        live = {c.get("name") for c in self.containers if c.get("name")}
+        for name in list(self._restart_counts.keys()):
+            if name not in live:
+                del self._restart_counts[name]
+        for name in list(self._restart_events.keys()):
+            if name not in live:
+                del self._restart_events[name]
+        for name in list(self._restart_alerted.keys()):
+            if name not in live:
+                del self._restart_alerted[name]
 
     async def _k8s_loop(self) -> None:
         while True:
