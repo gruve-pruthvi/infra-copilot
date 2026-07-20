@@ -182,6 +182,16 @@ export interface TestProviderResult {
   error?: string;
 }
 
+// ---------- Recommendations ----------
+
+export interface Recommendation {
+  id: string;
+  kind: "idle_container" | "dangling_image" | "orphan_volume" | "exited_container" | "restart_loop";
+  resource: string;
+  detail: Record<string, unknown>;
+  updated_at: string;
+}
+
 // ---------- Health ----------
 
 export interface HealthView {

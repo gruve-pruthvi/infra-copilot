@@ -9,6 +9,7 @@ import type {
   HistoryPoint,
   K8sSnapshot,
   PendingApproval,
+  Recommendation,
   SystemMetrics,
 } from "../api/types";
 import { toMs } from "../lib/format";
@@ -28,12 +29,14 @@ interface LiveState {
   sessionStatus: Record<string, string>;
   health: HealthView | null;
   toastQueue: PendingApproval[];
+  recommendations: Recommendation[];
 
   handleFrame: (topic: string, payload: unknown) => void;
   seedSystemHistory: (points: HistoryPoint[]) => void;
   setHealth: (h: HealthView) => void;
   removePendingApproval: (id: string) => void;
   dismissToast: (id: string) => void;
+  setRecommendations: (recs: Recommendation[]) => void;
 }
 
 function trimHistory(points: HistoryPoint[]): HistoryPoint[] {
@@ -57,6 +60,7 @@ export const useLiveStore = create<LiveState>((set) => ({
   sessionStatus: {},
   health: null,
   toastQueue: [],
+  recommendations: [],
 
   handleFrame: (topic, payload) => {
     switch (topic) {
@@ -116,6 +120,14 @@ export const useLiveStore = create<LiveState>((set) => ({
         set((s) => ({ sessionStatus: { ...s.sessionStatus, [p.session_id]: p.status } }));
         break;
       }
+      case "recommendations_updated": {
+        const r = payload as { recommendations: Recommendation[] };
+        set({ recommendations: r.recommendations });
+        break;
+      }
+      case "alert":
+        // No standalone state: the paired recommendations_updated frame refreshes the list.
+        break;
       default:
         break; // unknown topics ignored
     }
@@ -137,4 +149,5 @@ export const useLiveStore = create<LiveState>((set) => ({
       toastQueue: s.toastQueue.filter((x) => x.id !== id),
     })),
   dismissToast: (id) => set((s) => ({ toastQueue: s.toastQueue.filter((x) => x.id !== id) })),
+  setRecommendations: (recs) => set({ recommendations: recs }),
 }));

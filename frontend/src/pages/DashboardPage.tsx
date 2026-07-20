@@ -11,7 +11,7 @@ import {
   YAxis,
 } from "recharts";
 import { api } from "../api/client";
-import type { ContainerInfo, HistoryPoint, SystemMetrics } from "../api/types";
+import type { ContainerInfo, HistoryPoint, Recommendation, SystemMetrics } from "../api/types";
 import { StatusDot } from "../components/StatusDot";
 import { fmtClock, fmtPercent, humanBytes, toMs } from "../lib/format";
 import { useLiveStore } from "../stores/liveStore";
@@ -31,6 +31,120 @@ function fmtPorts(ports: ContainerInfo["ports"]): string {
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
     <h2 className="mb-2 font-mono text-[11px] uppercase tracking-widest text-faint">{children}</h2>
+  );
+}
+
+function draftFor(r: Recommendation): string {
+  switch (r.kind) {
+    case "restart_loop":
+      return `Why does container ${r.resource} keep restarting? Diagnose with logs and events.`;
+    case "idle_container":
+      return `Container ${r.resource} looks idle. Confirm and propose a cleanup.`;
+    case "dangling_image":
+      return `Review dangling image ${r.resource} and propose a cleanup.`;
+    case "orphan_volume":
+      return `Volume ${r.resource} is not attached to any container. Is it safe to remove?`;
+    default:
+      return `Investigate ${r.resource}.`;
+  }
+}
+
+function detailLine(r: Recommendation): string {
+  switch (r.kind) {
+    case "restart_loop": {
+      const restarts = r.detail.restarts_5m;
+      return `${restarts ?? "?"} restarts in the last 5 minutes.`;
+    }
+    case "idle_container":
+      return "No CPU/network activity observed recently.";
+    case "dangling_image":
+      return "Untagged image not referenced by any container.";
+    case "orphan_volume":
+      return "Volume is not attached to any container.";
+    case "exited_container":
+      return "Container has exited.";
+    default:
+      return "";
+  }
+}
+
+const KIND_LABEL: Record<Recommendation["kind"], string> = {
+  idle_container: "idle",
+  dangling_image: "dangling image",
+  orphan_volume: "orphan volume",
+  exited_container: "exited",
+  restart_loop: "restart loop",
+};
+
+function RecommendationsSection() {
+  const recommendations = useLiveStore((s) => s.recommendations);
+  const setRecommendations = useLiveStore((s) => s.setRecommendations);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    api
+      .get<{ recommendations: Recommendation[] }>("/api/recommendations")
+      .then((r) => setRecommendations(r.recommendations ?? []))
+      .catch(() => {
+        // best-effort seed; WS updates will still arrive
+      });
+  }, [setRecommendations]);
+
+  const diagnose = (r: Recommendation) => {
+    navigate("/", { state: { draft: draftFor(r) } });
+  };
+
+  const dismiss = async (r: Recommendation) => {
+    try {
+      await api.post(`/api/recommendations/${r.id}/dismiss`);
+    } catch {
+      // ignore; WS/refresh will reconcile state either way
+    }
+    setRecommendations(recommendations.filter((x) => x.id !== r.id));
+  };
+
+  if (recommendations.length === 0) return null;
+
+  return (
+    <section>
+      <SectionTitle>Recommendations</SectionTitle>
+      <div className="rounded border border-edge bg-panel">
+        {recommendations.map((r) => (
+          <div
+            key={r.id}
+            className="flex items-center gap-3 border-b border-edge/60 px-3 py-2.5 last:border-0"
+          >
+            <span
+              className={`shrink-0 rounded border px-1.5 py-px font-mono text-[10px] uppercase tracking-wider ${
+                r.kind === "restart_loop"
+                  ? "border-warn/40 bg-warn/10 text-warn"
+                  : "border-edge2 bg-raise text-dim"
+              }`}
+            >
+              {KIND_LABEL[r.kind]}
+            </span>
+            <span className="shrink-0 font-mono text-xs text-fg">{r.resource}</span>
+            <span className="min-w-0 flex-1 truncate text-xs text-dim">{detailLine(r)}</span>
+            <div className="flex shrink-0 gap-1.5">
+              <button
+                type="button"
+                onClick={() => diagnose(r)}
+                className="whitespace-nowrap rounded border border-edge2 px-2 py-0.5 text-[11px] text-dim hover:border-accent/50 hover:text-accent"
+              >
+                Diagnose
+              </button>
+              <button
+                type="button"
+                onClick={() => dismiss(r)}
+                className="whitespace-nowrap rounded border border-edge2 px-2 py-0.5 text-[11px] text-dim hover:border-danger/50 hover:text-danger"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -330,6 +444,7 @@ export function DashboardPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-6xl space-y-6 p-4">
+        <RecommendationsSection />
         <ContainersSection />
         <K8sSection />
         <SystemSection />
