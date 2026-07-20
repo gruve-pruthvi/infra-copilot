@@ -15,7 +15,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections import deque
+from collections import defaultdict, deque
 from typing import Any
 
 import psutil
@@ -24,6 +24,25 @@ from ..config import settings
 from .event_bus import bus
 
 log = logging.getLogger(__name__)
+
+
+def detect_restart_loops(prev_counts: dict[str, int], summaries: list[dict],
+                         events: dict[str, deque], now: float,
+                         window: float = 300.0, threshold: int = 3) -> list[str]:
+    """Mutates prev_counts/events trackers; returns containers currently restart-looping."""
+    looping = []
+    for c in summaries:
+        name, rc = c.get("name"), c.get("restart_count") or 0
+        if name is None:
+            continue
+        prev = prev_counts.get(name)
+        if prev is not None and rc > prev:
+            events[name].append(now)
+        prev_counts[name] = rc
+        recent = [t for t in events[name] if now - t <= window]
+        if len(recent) >= threshold:
+            looping.append(name)
+    return looping
 
 
 class MonitorService:
@@ -37,6 +56,9 @@ class MonitorService:
         self.history: deque[dict[str, Any]] = deque(maxlen=maxlen)
         self._docker_client = None
         self._tasks: list[asyncio.Task] = []
+        self._restart_counts: dict[str, int] = {}
+        self._restart_events: dict[str, deque] = defaultdict(lambda: deque(maxlen=20))
+        self._restart_alerted: dict[str, float] = {}
 
     # -- docker ------------------------------------------------------------
 
@@ -151,7 +173,20 @@ class MonitorService:
                 log.exception("system poll failed")
             bus.publish("containers_snapshot", {"available": self.docker_available, "error": self.docker_error, "containers": self.containers})
             bus.publish("system_metrics", self.system)
+            if self.docker_available:
+                await self._check_restart_loops()
             await asyncio.sleep(settings.monitor_interval_seconds)
+
+    async def _check_restart_loops(self) -> None:
+        from .recommendations import recommendations
+
+        now = time.time()
+        for name in detect_restart_loops(self._restart_counts, self.containers, self._restart_events, now):
+            if now - self._restart_alerted.get(name, 0) > 300:
+                self._restart_alerted[name] = now
+                count = len([t for t in self._restart_events[name] if now - t <= 300])
+                bus.publish("alert", {"kind": "restart_loop", "container": name, "restarts_5m": count})
+                await recommendations.record("restart_loop", name, {"restarts_5m": count})
 
     async def _k8s_loop(self) -> None:
         while True:
