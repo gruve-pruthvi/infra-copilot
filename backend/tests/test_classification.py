@@ -27,3 +27,8 @@ def test_exec_in_container_is_destructive():
 
 def test_check_connectivity_is_read():
     assert classify("monitoring", "check_connectivity") is Tier.READ
+
+
+def test_k8s_write_tools_classified():
+    assert classify("k8s", "scale_deployment") is Tier.MUTATING
+    assert classify("k8s", "rollout_restart") is Tier.MUTATING

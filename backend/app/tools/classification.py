@@ -58,6 +58,9 @@ SAFETY: dict[str, Tier] = {
     "k8s.get_pod_logs": Tier.READ,
     "k8s.list_events": Tier.READ,
     "k8s.describe_pod": Tier.READ,
+    # k8s — mutating
+    "k8s.scale_deployment": Tier.MUTATING,
+    "k8s.rollout_restart": Tier.MUTATING,
     # monitoring
     "monitoring.system_overview": Tier.READ,
     "monitoring.top_processes": Tier.READ,

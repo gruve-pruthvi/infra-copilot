@@ -1,4 +1,4 @@
-"""Kubernetes MCP server (stdio) — READ-ONLY.
+"""Kubernetes MCP server (stdio).
 
 Every tool degrades gracefully: if there is no kubeconfig or the cluster is
 unreachable, tools return {"available": false, "reason": ...} instead of
@@ -7,6 +7,7 @@ raising, so the model can explain the situation to the user.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -15,6 +16,8 @@ from mcp.types import ToolAnnotations
 mcp = FastMCP("k8s-tools")
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True)
+MUTATING = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
+DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
 
 _loaded = False
 
@@ -238,6 +241,48 @@ def describe_pod(pod: str, namespace: str = "default") -> dict:
             "conditions": [{"type": c.type, "status": c.status, "reason": c.reason} for c in (p.status.conditions or [])],
             "containers": containers,
         }
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "reason": f"{type(e).__name__}: {e}"}
+
+
+def _write_kwargs(dry_run: bool) -> dict:
+    kwargs = {"_request_timeout": 15}
+    if dry_run:
+        kwargs["dry_run"] = "All"  # server-side dry run: fully validated, nothing persisted
+    return kwargs
+
+
+@mcp.tool(annotations=MUTATING)
+def scale_deployment(deployment: str, replicas: int, namespace: str = "default", dry_run: bool = False) -> dict:
+    """Scale a deployment to the given replica count."""
+    apis = _load()
+    if bad := _unavailable(apis):
+        return bad
+    core, apps = apis
+    try:
+        res = apps.patch_namespaced_deployment_scale(
+            deployment, namespace, {"spec": {"replicas": int(replicas)}}, **_write_kwargs(dry_run)
+        )
+        return {"available": True, "dry_run": dry_run, "deployment": deployment,
+                "namespace": namespace, "replicas": res.spec.replicas}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "reason": f"{type(e).__name__}: {e}"}
+
+
+@mcp.tool(annotations=MUTATING)
+def rollout_restart(deployment: str, namespace: str = "default", dry_run: bool = False) -> dict:
+    """Trigger a rolling restart (patches the pod template restartedAt annotation)."""
+    apis = _load()
+    if bad := _unavailable(apis):
+        return bad
+    core, apps = apis
+    try:
+        ts = datetime.now(timezone.utc).isoformat()
+        body = {"spec": {"template": {"metadata": {"annotations":
+                {"kubectl.kubernetes.io/restartedAt": ts}}}}}
+        apps.patch_namespaced_deployment(deployment, namespace, body, **_write_kwargs(dry_run))
+        return {"available": True, "dry_run": dry_run, "deployment": deployment,
+                "namespace": namespace, "restarted_at": ts}
     except Exception as e:  # noqa: BLE001
         return {"available": False, "reason": f"{type(e).__name__}: {e}"}
 
