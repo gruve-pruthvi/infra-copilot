@@ -21,6 +21,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from ..config import settings
 from ..services.monitor import monitor
+from ..services.progress import emit_progress
 from .gateway import gateway
 
 _MCP_SERVERS = {
@@ -42,6 +43,14 @@ def _make_process_tool_call(server_id: str):
     return process_tool_call
 
 
+def _make_progress_handler(server_id: str):
+    async def on_progress(progress: float, total: float | None, message: str | None) -> None:
+        text = message or (f"{progress:g}/{total:g}" if total else f"{progress:g}")
+        emit_progress(server_id, text)
+
+    return on_progress
+
+
 def get_mcp_toolsets() -> list[MCPToolset]:
     global _mcp_toolsets
     if _mcp_toolsets is None:
@@ -51,6 +60,7 @@ def get_mcp_toolsets() -> list[MCPToolset]:
                 id=server_id,
                 process_tool_call=_make_process_tool_call(server_id),
                 tool_error_behavior="retry",
+                progress_handler=_make_progress_handler(server_id),
             )
             for server_id, module in _MCP_SERVERS.items()
         ]

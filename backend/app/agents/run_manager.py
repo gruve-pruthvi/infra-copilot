@@ -33,6 +33,7 @@ from ..config import settings
 from ..db.database import session_factory
 from ..db.models import Approval, ChatSession, Message
 from ..llm.models import ProviderNotConfigured
+from ..services import progress
 from ..services.event_bus import bus
 from ..tools.classification import SAFETY, Tier
 from ..tools.gateway import args_hash, redact
@@ -81,6 +82,12 @@ class Broadcaster:
                 q.put_nowait(event)
             except asyncio.QueueFull:
                 pass
+
+    def publish_nowait(self, event: dict[str, Any]) -> None:
+        """Sync fan-out entry point for callers outside the run loop (e.g. the
+        MCP progress_handler, which is an async callback but must not block
+        on backpressure — same non-blocking semantics as ``emit``)."""
+        self.emit(event)
 
 
 class RunManager:
@@ -249,6 +256,7 @@ class RunManager:
             async for ev in events:
                 self._convert_event(ev, turn, bcast)
 
+        progress.register_session(session_id, bcast.publish_nowait)
         try:
             agent, model_settings = build_agent()
             history = await self._load_history(session_id)
@@ -287,6 +295,8 @@ class RunManager:
             log.exception("agent run failed for session %s", session_id)
             await self._set_status(session_id, "error")
             bcast.emit({"type": "error", "message": f"{type(e).__name__}: {e}"})
+        finally:
+            progress.unregister_session(session_id)
 
     def _convert_event(self, ev: Any, turn: dict[str, Any], bcast: Broadcaster) -> None:
         if isinstance(ev, PartStartEvent) and isinstance(ev.part, TextPart):

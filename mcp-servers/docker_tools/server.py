@@ -8,15 +8,17 @@ has already been authorized, but still never acts when dry_run=True.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import docker
 import docker.errors
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import ToolAnnotations
 
 mcp = FastMCP("docker-tools")
@@ -370,12 +372,36 @@ def exec_in_container(container: str, command: str | list[str], workdir: str | N
 
 
 @mcp.tool(annotations=MUTATING)
-def pull_image(image: str, dry_run: bool = False) -> dict:
-    """Pull an image from a registry. May take a while for large images."""
+async def pull_image(image: str, dry_run: bool = False, ctx: Context | None = None) -> dict:
+    """Pull an image from a registry, streaming layer progress. May take a while for large images."""
     try:
         if dry_run:
             return {"dry_run": True, "would_pull": image}
-        img = _docker().images.pull(image)
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()
+
+        def worker() -> None:
+            try:
+                for line in _docker().api.pull(image, stream=True, decode=True):
+                    loop.call_soon_threadsafe(q.put_nowait, line)
+                loop.call_soon_threadsafe(q.put_nowait, None)
+            except Exception as e:  # noqa: BLE001 — surface pull errors through the queue
+                loop.call_soon_threadsafe(q.put_nowait, {"__error__": str(e)})
+                loop.call_soon_threadsafe(q.put_nowait, None)
+
+        threading.Thread(target=worker, daemon=True).start()
+        last_status: dict[str, str] = {}
+        while (line := await q.get()) is not None:
+            if "__error__" in line:
+                return {"error": True, "type": "PullError", "message": line["__error__"]}
+            status, layer = line.get("status"), line.get("id")
+            if status and status != last_status.get(layer or ""):
+                last_status[layer or ""] = status
+                if ctx is not None:
+                    await ctx.report_progress(
+                        progress=0, total=None, message=f"{layer + ': ' if layer else ''}{status}"
+                    )
+        img = _docker().images.get(image)
         return {"pulled": image, "id": img.short_id, "tags": img.tags}
     except Exception as e:  # noqa: BLE001
         return _err(e)

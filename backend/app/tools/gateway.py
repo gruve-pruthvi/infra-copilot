@@ -29,6 +29,7 @@ from pydantic_ai import ApprovalRequired, RunContext
 from ..config import settings
 from ..db.database import session_factory
 from ..db.models import Action, Approval
+from ..services import progress
 from ..services.event_bus import bus
 from ..services.settings_store import store
 from .classification import Tier, classify, timeout_for
@@ -117,6 +118,8 @@ class ToolGateway:
         result: Any = None
         error: str | None = None
         actual_timeout = timeout_for(server, tool)
+        if session_id and ctx.tool_call_id:
+            progress.set_inflight(server, session_id, ctx.tool_call_id)
         try:
             result = await asyncio.wait_for(executor(effective_args), timeout=actual_timeout)
             result = redact(result) if isinstance(result, (dict, list)) else result
@@ -132,6 +135,7 @@ class ToolGateway:
             result = {"error": True, "message": error}
             return result
         finally:
+            progress.clear_inflight(server)
             await self._audit(
                 session_id=session_id,
                 server=server,

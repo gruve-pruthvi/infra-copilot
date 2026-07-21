@@ -22,9 +22,11 @@ export function ToolCallCard({ call }: { call: ToolCallRecord }) {
           {call.tool}
         </span>
         <TierBadge tier={call.tier} />
-        <span className="ml-auto font-mono text-[11px] text-faint">
-          {done ? "done" : "running…"}
-        </span>
+        {!done && call.progress ? (
+          <span className="ml-auto max-w-[50%] font-mono text-[11px] text-dim truncate">{call.progress}</span>
+        ) : (
+          <span className="ml-auto font-mono text-[11px] text-faint">{done ? "done" : "running…"}</span>
+        )}
       </button>
       {open && (
         <div className="space-y-2 border-t border-edge px-2.5 py-2">

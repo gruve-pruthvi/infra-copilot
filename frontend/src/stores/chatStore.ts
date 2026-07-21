@@ -123,6 +123,20 @@ export const useChatStore = create<ChatState>((set, get) => {
           ),
         );
         break;
+      case "tool_progress":
+        patchItems((items) =>
+          items.map((it) =>
+            it.kind === "assistant" && it.toolCalls.some((tc) => tc.tool_call_id === ev.tool_call_id)
+              ? {
+                  ...it,
+                  toolCalls: it.toolCalls.map((tc) =>
+                    tc.tool_call_id === ev.tool_call_id ? { ...tc, progress: ev.text } : tc,
+                  ),
+                }
+              : it,
+          ),
+        );
+        break;
       case "approval_required":
         streamingItemId = null; // post-approval text goes to a fresh bubble
         patchItems((items) =>

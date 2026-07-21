@@ -19,6 +19,7 @@ export interface ToolCallRecord {
   args: Record<string, unknown>;
   tool_call_id: string;
   result_summary?: string | null;
+  progress?: string;
 }
 
 export interface ChatMessage {
@@ -66,6 +67,7 @@ export type ChatEvent =
       tool_call_id: string;
     }
   | { type: "tool_result"; tool: string; tool_call_id: string; result_summary: string }
+  | { type: "tool_progress"; tool_call_id: string; text: string }
   | { type: "approval_required"; approval: PendingApproval }
   | { type: "turn_paused" }
   | { type: "done"; usage: Usage }
