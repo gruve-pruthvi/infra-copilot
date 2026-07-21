@@ -1028,6 +1028,7 @@ dependencies = [
     { name = "kubernetes" },
     { name = "mcp" },
     { name = "psutil" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
@@ -1036,6 +1037,7 @@ requires-dist = [
     { name = "kubernetes", specifier = ">=31.0" },
     { name = "mcp", specifier = ">=1.2" },
     { name = "psutil", specifier = ">=6.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
 ]
 
 [[package]]

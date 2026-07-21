@@ -61,6 +61,8 @@ SAFETY: dict[str, Tier] = {
     # k8s — mutating
     "k8s.scale_deployment": Tier.MUTATING,
     "k8s.rollout_restart": Tier.MUTATING,
+    "k8s.apply_manifest": Tier.MUTATING,
+    "k8s.rollback_deployment": Tier.MUTATING,
     # monitoring
     "monitoring.system_overview": Tier.READ,
     "monitoring.top_processes": Tier.READ,

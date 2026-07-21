@@ -32,3 +32,8 @@ def test_check_connectivity_is_read():
 def test_k8s_write_tools_classified():
     assert classify("k8s", "scale_deployment") is Tier.MUTATING
     assert classify("k8s", "rollout_restart") is Tier.MUTATING
+
+
+def test_k8s_apply_and_rollback_classified():
+    assert classify("k8s", "apply_manifest") is Tier.MUTATING
+    assert classify("k8s", "rollback_deployment") is Tier.MUTATING

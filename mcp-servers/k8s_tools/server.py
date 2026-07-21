@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+import yaml
+from kubernetes import client, dynamic
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
@@ -283,6 +285,85 @@ def rollout_restart(deployment: str, namespace: str = "default", dry_run: bool =
         apps.patch_namespaced_deployment(deployment, namespace, body, **_write_kwargs(dry_run))
         return {"available": True, "dry_run": dry_run, "deployment": deployment,
                 "namespace": namespace, "restarted_at": ts}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "reason": f"{type(e).__name__}: {e}"}
+
+
+def _parse_manifest(manifest_yaml: str) -> list[dict] | dict:
+    """Parse one or more YAML documents; pure, no cluster access (unit-testable)."""
+    try:
+        docs = [d for d in yaml.safe_load_all(manifest_yaml) if d]
+    except yaml.YAMLError as e:
+        return {"error": True, "type": "InvalidYAML", "message": str(e)}
+    if not docs:
+        return {"error": True, "type": "EmptyManifest", "message": "no YAML documents found"}
+    for d in docs:
+        if not isinstance(d, dict) or not d.get("apiVersion") or not d.get("kind") \
+                or not d.get("metadata", {}).get("name"):
+            return {"error": True, "type": "InvalidManifest",
+                    "message": "every document needs apiVersion, kind and metadata.name"}
+    return docs
+
+
+@mcp.tool(annotations=MUTATING)
+def apply_manifest(manifest_yaml: str, namespace: str = "default", dry_run: bool = False) -> dict:
+    """Server-side apply of one or more YAML documents (create-or-update)."""
+    apis = _load()
+    if bad := _unavailable(apis):
+        return bad
+    docs = _parse_manifest(manifest_yaml)
+    if isinstance(docs, dict):
+        return {"available": True, **docs}
+    try:
+        # SPIKE (Phase 3 Task 2): DynamicClient.server_side_apply exists natively on the
+        # installed kubernetes package (confirmed via dir(DynamicClient)); Resource.patch is
+        # not a plain method (AttributeError on the class), it's proxied dynamically, so we
+        # call the client-level helper instead of the brief's resource.patch(...) fallback.
+        dyn = dynamic.DynamicClient(client.ApiClient())
+        applied = []
+        for doc in docs:
+            res = dyn.resources.get(api_version=doc["apiVersion"], kind=doc["kind"])
+            ns = doc.get("metadata", {}).get("namespace") or namespace
+            kwargs: dict[str, Any] = {"field_manager": "infra-copilot", "force_conflicts": True}
+            if res.namespaced:
+                kwargs["namespace"] = ns
+            if dry_run:
+                kwargs["dry_run"] = "All"
+            dyn.server_side_apply(res, body=doc, name=doc["metadata"]["name"], **kwargs)
+            applied.append({"kind": doc["kind"], "name": doc["metadata"]["name"],
+                            "namespace": ns if res.namespaced else None})
+        return {"available": True, "dry_run": dry_run, "applied": applied}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "reason": f"{type(e).__name__}: {e}"}
+
+
+@mcp.tool(annotations=MUTATING)
+def rollback_deployment(deployment: str, namespace: str = "default", dry_run: bool = False) -> dict:
+    """Roll a deployment back to its previous ReplicaSet revision."""
+    apis = _load()
+    if bad := _unavailable(apis):
+        return bad
+    core, apps = apis
+    try:
+        rss = apps.list_namespaced_replica_set(namespace, _request_timeout=15).items
+        owned = [rs for rs in rss if any(
+            o.kind == "Deployment" and o.name == deployment
+            for o in (rs.metadata.owner_references or []))]
+        owned.sort(key=lambda rs: int((rs.metadata.annotations or {})
+                                      .get("deployment.kubernetes.io/revision", "0")))
+        if len(owned) < 2:
+            return {"available": True, "error": True, "message": "no previous revision to roll back to"}
+        prev = owned[-2]
+        revision = (prev.metadata.annotations or {}).get("deployment.kubernetes.io/revision")
+        if dry_run:
+            return {"available": True, "dry_run": True, "deployment": deployment,
+                    "would_rollback_to_revision": revision}
+        tpl = prev.spec.template
+        if tpl.metadata and tpl.metadata.labels:
+            tpl.metadata.labels.pop("pod-template-hash", None)
+        body = {"spec": {"template": client.ApiClient().sanitize_for_serialization(tpl)}}
+        apps.patch_namespaced_deployment(deployment, namespace, body, _request_timeout=15)
+        return {"available": True, "deployment": deployment, "rolled_back_to_revision": revision}
     except Exception as e:  # noqa: BLE001
         return {"available": False, "reason": f"{type(e).__name__}: {e}"}
 
