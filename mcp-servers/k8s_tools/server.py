@@ -298,8 +298,9 @@ def _parse_manifest(manifest_yaml: str) -> list[dict] | dict:
     if not docs:
         return {"error": True, "type": "EmptyManifest", "message": "no YAML documents found"}
     for d in docs:
+        meta = d.get("metadata") if isinstance(d, dict) else None
         if not isinstance(d, dict) or not d.get("apiVersion") or not d.get("kind") \
-                or not d.get("metadata", {}).get("name"):
+                or not isinstance(meta, dict) or not meta.get("name"):
             return {"error": True, "type": "InvalidManifest",
                     "message": "every document needs apiVersion, kind and metadata.name"}
     return docs
