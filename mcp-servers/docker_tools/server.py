@@ -357,7 +357,7 @@ def restart_container(container: str, timeout: int = 10, dry_run: bool = False) 
     return _simple_container_action(container, "restart", dry_run, timeout=timeout)
 
 
-@mcp.tool(annotations=MUTATING)
+@mcp.tool(annotations=DESTRUCTIVE)
 def exec_in_container(container: str, command: str | list[str], workdir: str | None = None, dry_run: bool = False) -> dict:
     """Run a command inside a running container and return exit code + output (capped)."""
     try:

@@ -1,6 +1,6 @@
 # Project Status & Roadmap
 
-> Last updated: 2026-07-11 · Companion to the vision document at
+> Last updated: 2026-07-21 · Companion to the vision document at
 > [`docs/Local AI Infrastructure Control Platform.md`](docs/Local%20AI%20Infrastructure%20Control%20Platform.md)
 > and the README quickstart.
 
@@ -107,20 +107,40 @@ Deliberate MVP deviations from the vision doc (documented decisions, not gaps):
 
 ---
 
-## Phase 2 — Deeper operations (next)
+## Phase 2 — Deeper operations (✅ complete)
 
 Goal: make the copilot genuinely useful for day-to-day local dev operations.
+All 12 items below were delivered.
 
-| Item | Notes |
-|---|---|
-| **Docker Compose support** | `compose_up/down/ps/logs` tools on the docker MCP server; pairs with `write_manifest` ("generate a compose file and run it"). Highest user value per effort. |
-| **Database provisioning flows** (vision §6) | Guided "Add PostgreSQL / Redis" — volume + credentials + connectivity check + connection string. Mostly prompt + a `check_connectivity` tool; the deploy path already exists. |
-| **Container shell / exec tool** | `exec_in_container` (mutating tier) for diagnostics ("check if the config file exists inside the container"). Needs output caps + command audit. |
-| **Approval UX round 2** | Batch approve/reject; "new message auto-rejects stale pending approvals and continues"; approval cards in the global toast actionable from any page. |
-| **History management** | Trim/summarize `agent_history` beyond a token budget so long sessions don't blow the context window (pydantic-ai history processors). |
-| **Scheduled cost scans** | Background job runs the cost scan daily, stores findings, surfaces them as dashboard recommendations (vision §7.1 "alerts and recommendations"). |
-| **Log-derived RCA signals** | Restart-loop detector in the monitor loop → proactive alert on the dashboard ("seed-broken-postgres restarted 9× in 2 min — Diagnose?"). |
-| **Per-tool timeouts + progress events** | Long pulls stream progress text to the UI instead of a silent spinner. |
+### What was built
+
+| Area | Status | Where |
+|---|---|---|
+| Per-tool timeouts | ✅ | `backend/app/tools/classification.py` (`timeout_for`), `backend/app/tools/gateway.py` |
+| Docker Compose tools | ✅ | `mcp-servers/docker_tools/server.py` (`compose_up/down/ps/logs`) |
+| `exec_in_container` diagnostics tool | ✅ | `mcp-servers/docker_tools/server.py`; classified **DESTRUCTIVE** (promoted from the original MUTATING plan — see `backend/app/tools/classification.py`) |
+| `check_connectivity` + DB provisioning prompt | ✅ | `mcp-servers/monitoring_tools/server.py` (`check_connectivity`), `backend/app/agents/prompts.py` |
+| Batch approvals | ✅ | `backend/app/api/approvals.py`, `frontend/src/components/ApprovalToast.tsx` |
+| Auto-reject stale approvals on new message | ✅ | `backend/app/agents/run_manager.py` |
+| Frontend approval toast queue + batch UI | ✅ | `frontend/src/components/ApprovalToast.tsx` |
+| Agent-history trimming | ✅ | `backend/app/agents/history.py` |
+| Recommendations table + scheduled cost scanner + API | ✅ | `backend/app/services/recommendations.py`, `backend/app/api/recommendations.py` |
+| Restart-loop detector | ✅ | `backend/app/services/monitor.py` (`detect_restart_loops`, `_check_restart_loops`) |
+| Dashboard recommendations panel | ✅ | `frontend/src/pages/DashboardPage.tsx` |
+| Streaming tool-progress | ✅ | `backend/app/services/progress.py` |
+
+### Known limitation
+
+- **Tool-progress attribution is per-server, not per-call.** `backend/app/services/progress.py`
+  tracks progress by MCP server process, so two concurrent sessions hitting the
+  same MCP server (e.g. two chats both pulling docker images) can see
+  cosmetically mis-routed progress text. Cosmetic only — it does not affect
+  correctness of the underlying tool call or the gateway's approval/audit path.
+
+### Verification status
+
+46 backend tests pass; frontend strict build clean; browser + real-LLM smoke
+deferred.
 
 ## Phase 3 — Kubernetes write ops & multi-agent (vision §8, §10)
 
