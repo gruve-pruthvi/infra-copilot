@@ -40,7 +40,7 @@ from ..tools.gateway import args_hash, redact
 from .copilot import build_agent
 from ..tools.roles import min_role, normalize_role
 from .deps import RunDeps
-from .history import trim_history
+from .history import reconcile_tool_calls, trim_history
 
 log = logging.getLogger(__name__)
 
@@ -265,7 +265,10 @@ class RunManager:
         progress.register_session(session_id, bcast.publish_nowait)
         try:
             agent, model_settings = build_agent()
-            history = await self._load_history(session_id)
+            # Calls the resume is about to answer for real must not be
+            # reconciled away underneath it.
+            deferred_ids = set(deferred_results.approvals) if deferred_results else set()
+            history = await self._load_history(session_id, deferred_ids)
             usage_limits = None
             try:
                 from pydantic_ai.usage import UsageLimits
@@ -452,7 +455,7 @@ class RunManager:
                 sess.role = min_role(getattr(sess, "role", None), resolver_role)
                 await db.commit()
 
-    async def _load_history(self, session_id: str):
+    async def _load_history(self, session_id: str, deferred: set[str] | None = None):
         async with session_factory() as db:
             sess = await db.get(ChatSession, session_id)
         if sess and sess.agent_history:
@@ -460,7 +463,8 @@ class RunManager:
 
             msgs = ModelMessagesTypeAdapter.validate_json(sess.agent_history)
             msgs = trim_history(msgs, settings.history_char_budget)
-            return msgs
+            # After trimming, so a cut can never leave a call unanswered.
+            return reconcile_tool_calls(msgs, deferred)
         return None
 
     async def _save_history(self, session_id: str, history_json: bytes) -> None:
