@@ -63,6 +63,16 @@ SAFETY: dict[str, Tier] = {
     "k8s.rollout_restart": Tier.MUTATING,
     "k8s.apply_manifest": Tier.MUTATING,
     "k8s.rollback_deployment": Tier.MUTATING,
+    # k8s — configmaps (values are not secret)
+    "k8s.list_configmaps": Tier.READ,
+    "k8s.get_configmap": Tier.READ,
+    "k8s.apply_configmap": Tier.MUTATING,
+    "k8s.delete_configmap": Tier.DESTRUCTIVE,
+    # k8s — secrets. Reads project to key names only; every write is destructive
+    # so it always needs an explicit typed confirmation.
+    "k8s.list_secrets": Tier.READ,
+    "k8s.apply_secret": Tier.DESTRUCTIVE,
+    "k8s.delete_secret": Tier.DESTRUCTIVE,
     # monitoring
     "monitoring.system_overview": Tier.READ,
     "monitoring.top_processes": Tier.READ,

@@ -7,6 +7,7 @@ raising, so the model can explain the situation to the user.
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timezone
 from typing import Any
 
@@ -365,6 +366,162 @@ def rollback_deployment(deployment: str, namespace: str = "default", dry_run: bo
         body = {"spec": {"template": client.ApiClient().sanitize_for_serialization(tpl)}}
         apps.patch_namespaced_deployment(deployment, namespace, body, _request_timeout=15)
         return {"available": True, "deployment": deployment, "rolled_back_to_revision": revision}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "reason": f"{type(e).__name__}: {e}"}
+
+
+# --- ConfigMaps & Secrets ----------------------------------------------------
+#
+# Secret VALUES must never cross this boundary. Read tools project a Secret
+# down to its key names via _secret_summary(); the raw `data` map is never
+# returned, not even base64-encoded. Write tools accept values (that is the
+# point) but are DESTRUCTIVE-tier, so they always need explicit approval, and
+# the gateway redacts the args in both the approval card and the audit row.
+
+
+def _configmap_summary(name: str, namespace: str, data: dict | None) -> dict:
+    data = data or {}
+    return {"name": name, "namespace": namespace, "keys": sorted(data), "data": dict(data)}
+
+
+def _secret_summary(name: str, namespace: str, data: dict | None, secret_type: str | None = None) -> dict:
+    """Project a Secret to metadata only — key names and value sizes, never values."""
+    data = data or {}
+    sizes = {}
+    for k, v in data.items():
+        try:
+            sizes[k] = len(base64.b64decode(v)) if isinstance(v, str) else 0
+        except Exception:  # noqa: BLE001 — malformed base64 shouldn't break a listing
+            sizes[k] = 0
+    return {
+        "name": name,
+        "namespace": namespace,
+        "type": secret_type,
+        "keys": sorted(data),
+        "value_sizes_bytes": sizes,
+    }
+
+
+@mcp.tool(annotations=READ_ONLY)
+def list_configmaps(namespace: str = "default") -> dict:
+    """List ConfigMaps in a namespace (names and key names, no values)."""
+    apis = _load()
+    if bad := _unavailable(apis):
+        return bad
+    core, _ = apis
+    try:
+        items = core.list_namespaced_config_map(namespace, _request_timeout=15).items
+        return {"available": True, "namespace": namespace, "configmaps": [
+            {"name": cm.metadata.name, "keys": sorted(cm.data or {})} for cm in items]}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "reason": f"{type(e).__name__}: {e}"}
+
+
+@mcp.tool(annotations=READ_ONLY)
+def get_configmap(name: str, namespace: str = "default") -> dict:
+    """Read one ConfigMap including its values."""
+    apis = _load()
+    if bad := _unavailable(apis):
+        return bad
+    core, _ = apis
+    try:
+        cm = core.read_namespaced_config_map(name, namespace, _request_timeout=15)
+        return {"available": True, **_configmap_summary(name, namespace, cm.data)}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "reason": f"{type(e).__name__}: {e}"}
+
+
+@mcp.tool(annotations=MUTATING)
+def apply_configmap(name: str, data: dict, namespace: str = "default", dry_run: bool = False) -> dict:
+    """Create or replace a ConfigMap with the given flat string->string data."""
+    apis = _load()
+    if bad := _unavailable(apis):
+        return bad
+    core, _ = apis
+    if not isinstance(data, dict) or any(not isinstance(v, str) for v in data.values()):
+        return {"available": True, "error": True, "type": "InvalidConfigMapData",
+                "message": "data must be a flat mapping of string keys to string values"}
+    body = {"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": name, "namespace": namespace}, "data": dict(data)}
+    try:
+        try:
+            core.replace_namespaced_config_map(name, namespace, body, **_write_kwargs(dry_run))
+            action = "replaced"
+        except Exception:  # noqa: BLE001 — not found (or not replaceable): create instead
+            core.create_namespaced_config_map(namespace, body, **_write_kwargs(dry_run))
+            action = "created"
+        return {"available": True, "dry_run": dry_run, "action": action,
+                "name": name, "namespace": namespace, "keys": sorted(data)}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "reason": f"{type(e).__name__}: {e}"}
+
+
+@mcp.tool(annotations=DESTRUCTIVE)
+def delete_configmap(name: str, namespace: str = "default", dry_run: bool = False) -> dict:
+    """Delete a ConfigMap. Pods mounting it keep their copy until restarted."""
+    apis = _load()
+    if bad := _unavailable(apis):
+        return bad
+    core, _ = apis
+    try:
+        core.delete_namespaced_config_map(name, namespace, **_write_kwargs(dry_run))
+        return {"available": True, "dry_run": dry_run, "deleted": name, "namespace": namespace}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "reason": f"{type(e).__name__}: {e}"}
+
+
+@mcp.tool(annotations=READ_ONLY)
+def list_secrets(namespace: str = "default") -> dict:
+    """List Secrets — names, types and KEY NAMES only. Values are never returned."""
+    apis = _load()
+    if bad := _unavailable(apis):
+        return bad
+    core, _ = apis
+    try:
+        items = core.list_namespaced_secret(namespace, _request_timeout=15).items
+        return {"available": True, "namespace": namespace, "secrets": [
+            _secret_summary(s.metadata.name, namespace, s.data, s.type) for s in items]}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "reason": f"{type(e).__name__}: {e}"}
+
+
+@mcp.tool(annotations=DESTRUCTIVE)
+def apply_secret(name: str, string_data: dict, namespace: str = "default",
+                 secret_type: str = "Opaque", dry_run: bool = False) -> dict:
+    """Create or replace a Secret from plaintext string_data (values are base64-encoded
+    by the API server). The result reports key names only — never the values."""
+    apis = _load()
+    if bad := _unavailable(apis):
+        return bad
+    core, _ = apis
+    if not isinstance(string_data, dict) or any(not isinstance(v, str) for v in string_data.values()):
+        return {"available": True, "error": True, "type": "InvalidSecretData",
+                "message": "string_data must be a flat mapping of string keys to string values"}
+    body = {"apiVersion": "v1", "kind": "Secret", "type": secret_type,
+            "metadata": {"name": name, "namespace": namespace}, "stringData": dict(string_data)}
+    try:
+        try:
+            core.replace_namespaced_secret(name, namespace, body, **_write_kwargs(dry_run))
+            action = "replaced"
+        except Exception:  # noqa: BLE001 — not found (or not replaceable): create instead
+            core.create_namespaced_secret(namespace, body, **_write_kwargs(dry_run))
+            action = "created"
+        return {"available": True, "dry_run": dry_run, "action": action, "name": name,
+                "namespace": namespace, "keys": sorted(string_data)}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "reason": f"{type(e).__name__}: {e}"}
+
+
+@mcp.tool(annotations=DESTRUCTIVE)
+def delete_secret(name: str, namespace: str = "default", dry_run: bool = False) -> dict:
+    """Delete a Secret. Workloads referencing it will fail to start until recreated."""
+    apis = _load()
+    if bad := _unavailable(apis):
+        return bad
+    core, _ = apis
+    try:
+        core.delete_namespaced_secret(name, namespace, **_write_kwargs(dry_run))
+        return {"available": True, "dry_run": dry_run, "deleted": name, "namespace": namespace}
     except Exception as e:  # noqa: BLE001
         return {"available": False, "reason": f"{type(e).__name__}: {e}"}
 
