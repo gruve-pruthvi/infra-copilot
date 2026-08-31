@@ -16,18 +16,42 @@ export function errorMessage(e: unknown): string {
   return String(e);
 }
 
+// Set by main.tsx to avoid a circular import between the API layer and the
+// auth store (the store calls `api`, and `api` must notify the store on 401).
+let onUnauthorized: (() => void) | null = null;
+export function setUnauthorizedHandler(fn: () => void): void {
+  onUnauthorized = fn;
+}
+
+/** Bearer header for the stored token. The httpOnly cookie already covers
+ *  same-origin requests; this keeps things working if cookies are blocked. */
+export function authHeaders(): Record<string, string> {
+  try {
+    const token = localStorage.getItem("infra_copilot_token");
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
     res = await fetch(path, {
       ...init,
+      credentials: "same-origin",
       headers: {
         "Content-Type": "application/json",
+        ...authHeaders(),
         ...(init?.headers as Record<string, string> | undefined),
       },
     });
   } catch {
     throw new ApiError(0, "Backend unreachable");
+  }
+  if (res.status === 401 && !path.startsWith("/api/auth/")) {
+    // Token rejected: drop it and let the shell fall back to the login gate.
+    onUnauthorized?.();
   }
   if (!res.ok) {
     let detail = `Request failed (HTTP ${res.status})`;

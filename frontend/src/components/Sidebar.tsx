@@ -1,6 +1,7 @@
 import { NavLink, Link } from "react-router-dom";
 import { useLiveStore } from "../stores/liveStore";
 import { BoolDot } from "./StatusDot";
+import { RoleBadge } from "./RoleBadge";
 
 const NAV = [
   { to: "/", label: "Chat" },
@@ -61,6 +62,8 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
+
+      <RoleBadge />
 
       <div className="space-y-1.5 border-t border-edge px-4 py-3 text-xs">
         <div className="mb-1 font-mono text-[10px] uppercase tracking-widest text-faint">

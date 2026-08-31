@@ -32,7 +32,8 @@ CATALOG: dict[str, dict[str, Any]] = {
     "google": {
         "label": "Google Gemini",
         "key_setting": "google_api_key",
-        "models": ["gemini-3-pro", "gemini-2.5-pro", "gemini-2.5-flash"],
+        # Verified against the live /v1beta/models listing (2026-08-31).
+        "models": ["gemini-3.1-pro-preview", "gemini-3.7-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
         "default": "gemini-2.5-pro",
     },
 }

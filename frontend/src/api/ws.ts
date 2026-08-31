@@ -2,9 +2,18 @@
 // frames, auto-reconnect with exponential backoff) and one for plain-text
 // container log tails.
 
+export const WS_UNAUTHORIZED = 4401;
+
 function wsUrl(path: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}${path}`;
+  let token: string | null = null;
+  try {
+    token = localStorage.getItem("infra_copilot_token");
+  } catch {
+    token = null;
+  }
+  const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+  return `${proto}//${window.location.host}${path}${qs}`;
 }
 
 export type EventFrameHandler = (topic: string, payload: unknown) => void;
@@ -37,8 +46,14 @@ export function connectEvents(onFrame: EventFrameHandler): () => void {
         // ignore malformed frame
       }
     };
-    ws.onclose = () => {
+    ws.onclose = (e) => {
       onFrame("__close", null);
+      if (e.code === WS_UNAUTHORIZED) {
+        // Reconnecting can never succeed until the user logs in again.
+        onFrame("__unauthorized", null);
+        closed = true;
+        return;
+      }
       scheduleReconnect();
     };
     ws.onerror = () => {

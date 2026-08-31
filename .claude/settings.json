@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run pytest *)",
+      "Bash(cd backend && uv run pytest *)",
+      "Bash(npm run build)",
+      "Bash(cd frontend && npm run build)",
+      "Bash(docker compose ps *)",
+      "Bash(docker compose logs *)",
+      "Bash(docker info *)",
+      "Bash(kubectl get *)",
+      "Bash(kubectl logs *)",
+      "Bash(go env *)",
+      "Bash(go vet *)",
+      "Bash(buf lint *)",
+      "Bash(/Users/Pruthvi.Parade@gruve.ai/.claude/plugins/cache/claude-plugins-official/superpowers/*/skills/subagent-driven-development/scripts/task-brief *)",
+      "Bash(/Users/Pruthvi.Parade@gruve.ai/.claude/plugins/cache/claude-plugins-official/superpowers/*/skills/subagent-driven-development/scripts/review-package *)"
+    ]
+  }
+}

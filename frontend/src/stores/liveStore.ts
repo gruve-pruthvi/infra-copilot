@@ -2,6 +2,7 @@
 // poll. Holds the latest snapshots so every page renders from one source.
 
 import { create } from "zustand";
+import { useAuthStore } from "./authStore";
 import type {
   ActionRecord,
   ContainersSnapshot,
@@ -69,6 +70,11 @@ export const useLiveStore = create<LiveState>((set) => ({
         break;
       case "__close":
         set({ wsConnected: false });
+        break;
+      case "__unauthorized":
+        // Socket refused at handshake — fall back to the login gate.
+        set({ wsConnected: false });
+        useAuthStore.getState().onUnauthorized();
         break;
       case "containers_snapshot":
         set({ containers: payload as ContainersSnapshot });
