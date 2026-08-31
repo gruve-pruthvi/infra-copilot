@@ -2,7 +2,6 @@
 // manually: frames are separated by a blank line, payload lines start with
 // "data:"; comment lines (": keepalive") are ignored.
 
-import { authHeaders } from "./client";
 import type { ChatEvent } from "./types";
 
 function emitFrame(frame: string, onEvent: (ev: ChatEvent) => void): void {
@@ -37,7 +36,6 @@ export async function streamSSE(
       credentials: "same-origin",
       headers: {
         Accept: "text/event-stream",
-        ...authHeaders(),
         ...(init?.headers as Record<string, string> | undefined),
       },
     });

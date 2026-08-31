@@ -38,7 +38,7 @@ from ..services.event_bus import bus
 from ..tools.classification import SAFETY, Tier
 from ..tools.gateway import args_hash, redact
 from .copilot import build_agent
-from ..tools.roles import normalize_role
+from ..tools.roles import min_role, normalize_role
 from .deps import RunDeps
 from .history import trim_history
 
@@ -147,6 +147,7 @@ class RunManager:
         approved: bool,
         confirm_text: str | None = None,
         reason: str | None = None,
+        resolver_role: str | None = None,
     ) -> dict[str, Any]:
         """Mark one approval resolved; resume the paused run when all are resolved."""
         now = datetime.now(timezone.utc)
@@ -186,6 +187,8 @@ class RunManager:
                 msg = r.reject_reason or ("approval expired" if r.status == "expired" else "The user rejected this action.")
                 results.approvals[r.tool_call_id] = ToolDenied(message=f"Denied: {msg}")
 
+        # Narrow the run's ceiling to whoever is resuming it before relaunching.
+        await self._narrow_role(row.session_id, resolver_role)
         async with session_factory() as db:
             sess = await db.get(ChatSession, row.session_id)
             sess.status = "running"
@@ -432,6 +435,22 @@ class RunManager:
         async with session_factory() as db:
             sess = await db.get(ChatSession, session_id)
             return normalize_role(getattr(sess, "role", None) if sess else None)
+
+    async def _narrow_role(self, session_id: str, resolver_role: str | None) -> None:
+        """Clamp a session's stored ceiling to the role resuming it.
+
+        A run records its ceiling at turn start, but the resume can happen much
+        later — after a 15-minute elevation has lapsed, or driven by a
+        different, lower-privileged caller (rejecting needs no privilege at all
+        yet still resumes the run). Privilege may only ever narrow here.
+        """
+        if resolver_role is None:
+            return
+        async with session_factory() as db:
+            sess = await db.get(ChatSession, session_id)
+            if sess is not None:
+                sess.role = min_role(getattr(sess, "role", None), resolver_role)
+                await db.commit()
 
     async def _load_history(self, session_id: str):
         async with session_factory() as db:

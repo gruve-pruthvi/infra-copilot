@@ -69,7 +69,8 @@ async def approve(approval_id: str, body: ApprovalDecision,
                   identity: dict = Depends(current_identity)):
     await _assert_may_approve(approval_id, identity["role"])
     try:
-        return await run_manager.resolve_approval(approval_id, approved=True, confirm_text=body.confirm_text)
+        return await run_manager.resolve_approval(approval_id, approved=True, confirm_text=body.confirm_text,
+                                                  resolver_role=identity["role"])
     except KeyError:
         raise HTTPException(404, "approval not found")
     except ValueError as e:
@@ -77,9 +78,13 @@ async def approve(approval_id: str, body: ApprovalDecision,
 
 
 @router.post("/{approval_id}/reject")
-async def reject(approval_id: str, body: ApprovalDecision):
+async def reject(approval_id: str, body: ApprovalDecision,
+                 identity: dict = Depends(current_identity)):
+    # Rejecting needs no privilege, but it still resumes the run — so the
+    # resolver's role clamps the ceiling the resumed run executes under.
     try:
-        return await run_manager.resolve_approval(approval_id, approved=False, reason=body.reason)
+        return await run_manager.resolve_approval(approval_id, approved=False, reason=body.reason,
+                                                  resolver_role=identity["role"])
     except KeyError:
         raise HTTPException(404, "approval not found")
     except ValueError as e:
@@ -104,7 +109,8 @@ async def resolve_batch(body: BatchDecisions, identity: dict = Depends(current_i
     resumed = False
     for aid in body.reject:
         try:
-            r = await run_manager.resolve_approval(aid, approved=False, reason=body.reason or "batch reject")
+            r = await run_manager.resolve_approval(aid, approved=False, reason=body.reason or "batch reject",
+                                                   resolver_role=identity["role"])
             resumed = resumed or bool(r.get("resumed"))
             results[aid] = {"ok": True, **r}
         except KeyError:
@@ -118,7 +124,8 @@ async def resolve_batch(body: BatchDecisions, identity: dict = Depends(current_i
         try:
             # Per-item, not a raise: one forbidden id must not abort the batch.
             await _assert_may_approve(aid, identity["role"])
-            r = await run_manager.resolve_approval(aid, approved=True, confirm_text=body.confirm_texts.get(aid))
+            r = await run_manager.resolve_approval(aid, approved=True, confirm_text=body.confirm_texts.get(aid),
+                                                   resolver_role=identity["role"])
             resumed = resumed or bool(r.get("resumed"))
             results[aid] = {"ok": True, **r}
         except HTTPException as e:

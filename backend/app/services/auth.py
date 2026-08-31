@@ -12,9 +12,11 @@ persisted or logged.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, select
@@ -25,6 +27,8 @@ from ..tools.roles import normalize_role
 from .settings_store import store
 
 MIN_PIN_LENGTH = 4
+MAX_FAILED_ATTEMPTS = 5
+LOCKOUT_SECONDS = 60
 TOKEN_TTL_SECONDS = 7 * 24 * 3600
 ELEVATION_SECONDS = 900  # 15 min, mirroring the approval TTL
 COOKIE_NAME = "infra_copilot_token"
@@ -40,6 +44,55 @@ def _aware(dt: datetime | None) -> datetime | None:
 
 
 # --- PIN ---------------------------------------------------------------------
+
+# --- brute-force throttle ----------------------------------------------------
+#
+# The PIN is the only credential in the system and scrypt at interactive cost
+# is ~25ms, so an unthrottled endpoint exhausts a 4-digit PIN in minutes. State
+# is process-local (single-operator, single-process app) and shared by /login
+# and /elevate, which are two oracles for the same secret.
+
+_failed = 0
+_locked_until = 0.0
+
+
+def failed_attempts() -> int:
+    return _failed
+
+
+def reset_throttle() -> None:
+    global _failed, _locked_until
+    _failed, _locked_until = 0, 0.0
+
+
+def throttle_retry_after() -> int:
+    """Seconds the caller must wait, or 0 if they may try now."""
+    remaining = _locked_until - time.monotonic()
+    return int(remaining) + 1 if remaining > 0 else 0
+
+
+def record_failure() -> None:
+    global _failed, _locked_until
+    _failed += 1
+    if _failed >= MAX_FAILED_ATTEMPTS:
+        # Exponential back-off, so sustained guessing gets slower and slower.
+        over = _failed - MAX_FAILED_ATTEMPTS
+        _locked_until = time.monotonic() + LOCKOUT_SECONDS * (2 ** min(over, 5))
+
+
+def record_success() -> None:
+    reset_throttle()
+
+
+async def verify_pin_async(pin: str, stored: str) -> bool:
+    """verify_pin off the event loop — scrypt is ~25ms of blocking CPU and the
+    endpoints that call it are reachable unauthenticated."""
+    return await asyncio.to_thread(verify_pin, pin, stored)
+
+
+async def hash_pin_async(pin: str) -> str:
+    return await asyncio.to_thread(hash_pin, pin)
+
 
 def hash_pin(pin: str) -> str:
     if not isinstance(pin, str) or len(pin) < MIN_PIN_LENGTH:

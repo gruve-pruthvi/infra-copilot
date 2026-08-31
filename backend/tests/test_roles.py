@@ -166,3 +166,50 @@ async def test_dry_run_mode_does_not_bypass_the_role_ceiling(session_id, monkeyp
     )
     assert calls == []
     assert res["denied"] is True
+
+
+# --- Finding 7: a resumed run's ceiling narrows to whoever resumed it --------
+
+def test_min_role_narrows():
+    from app.tools.roles import min_role
+
+    assert min_role("admin", "viewer") == "viewer"
+    assert min_role("viewer", "admin") == "viewer"
+    assert min_role("operator", "admin") == "operator"
+    assert min_role("admin", "admin") == "admin"
+    # junk on either side collapses to the least privilege
+    assert min_role("admin", None) == "viewer"
+    assert min_role("root", "admin") == "viewer"
+
+
+async def test_resume_clamps_stored_ceiling(session_id):
+    """A turn started as admin must not stay admin when a viewer resumes it.
+
+    The elevation window and the approval TTL are both 15 minutes, so a run
+    started while elevated can easily be resumed after the elevation lapsed.
+    """
+    from app.agents.run_manager import run_manager
+    from app.db.database import session_factory
+    from app.db.models import ChatSession
+
+    async with session_factory() as db:
+        sess = await db.get(ChatSession, session_id)
+        sess.role = "admin"
+        await db.commit()
+
+    await run_manager._narrow_role(session_id, "viewer")
+    assert await run_manager._role_for(session_id) == "viewer"
+
+
+async def test_resume_never_widens_the_ceiling(session_id):
+    from app.agents.run_manager import run_manager
+    from app.db.database import session_factory
+    from app.db.models import ChatSession
+
+    async with session_factory() as db:
+        sess = await db.get(ChatSession, session_id)
+        sess.role = "viewer"
+        await db.commit()
+
+    await run_manager._narrow_role(session_id, "admin")
+    assert await run_manager._role_for(session_id) == "viewer", "resume must never escalate"

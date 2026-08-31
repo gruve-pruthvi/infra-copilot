@@ -4,16 +4,11 @@
 
 export const WS_UNAUTHORIZED = 4401;
 
+// The httpOnly session cookie is sent automatically on a same-origin
+// websocket handshake, so no token ever appears in the URL.
 function wsUrl(path: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  let token: string | null = null;
-  try {
-    token = localStorage.getItem("infra_copilot_token");
-  } catch {
-    token = null;
-  }
-  const qs = token ? `?token=${encodeURIComponent(token)}` : "";
-  return `${proto}//${window.location.host}${path}${qs}`;
+  return `${proto}//${window.location.host}${path}`;
 }
 
 export type EventFrameHandler = (topic: string, payload: unknown) => void;

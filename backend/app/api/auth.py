@@ -58,6 +58,25 @@ async def require_auth(identity: dict = Depends(current_identity)) -> dict:
     return identity
 
 
+async def require_admin(identity: dict = Depends(current_identity)) -> dict:
+    """Admin-only guard for controls that affect the whole platform."""
+    if identity["role"] != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail=f"role '{identity['role']}' may not change this — elevate to admin first",
+        )
+    return identity
+
+
+def _check_throttle() -> None:
+    retry = auth.throttle_retry_after()
+    if retry:
+        raise HTTPException(
+            status_code=429, detail=f"Too many failed attempts — try again in {retry}s",
+            headers={"Retry-After": str(retry)},
+        )
+
+
 def _set_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         auth.COOKIE_NAME, token,
@@ -92,7 +111,7 @@ async def setup(body: SetupBody, response: Response) -> dict:
     if auth.auth_required():
         raise HTTPException(status_code=409, detail="A PIN is already configured")
     try:
-        pin_hash = auth.hash_pin(body.pin)
+        pin_hash = await auth.hash_pin_async(body.pin)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     await store.update({"auth_pin_hash": pin_hash, "auth_default_role": normalize_role(body.default_role)})
@@ -105,8 +124,11 @@ async def setup(body: SetupBody, response: Response) -> dict:
 async def login(body: PinBody, response: Response) -> dict:
     if not auth.auth_required():
         raise HTTPException(status_code=409, detail="No PIN configured — run setup first")
-    if not auth.verify_pin(body.pin, store.get("auth_pin_hash")):
+    _check_throttle()
+    if not await auth.verify_pin_async(body.pin, store.get("auth_pin_hash")):
+        auth.record_failure()
         raise HTTPException(status_code=401, detail="Incorrect PIN")
+    auth.record_success()
     role = auth.default_role()
     token = await auth.issue_token(role=role)
     _set_cookie(response, token)
@@ -126,8 +148,11 @@ async def logout(request: Request, response: Response) -> dict:
 async def elevate(body: PinBody, request: Request,
                   identity: dict = Depends(require_auth)) -> dict:
     """Re-enter the PIN to hold admin for a short window."""
-    if not auth.verify_pin(body.pin, store.get("auth_pin_hash")):
+    _check_throttle()
+    if not await auth.verify_pin_async(body.pin, store.get("auth_pin_hash")):
+        auth.record_failure()
         raise HTTPException(status_code=401, detail="Incorrect PIN")
+    auth.record_success()
     token = _token_from(request)
     if not token:
         raise HTTPException(status_code=401, detail="Authentication required")

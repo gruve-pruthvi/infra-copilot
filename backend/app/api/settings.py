@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from .auth import require_admin
 from ..llm.models import CATALOG, test_provider
 from ..schemas.api import ProviderTest, SettingsUpdate
 from ..services.settings_store import store
@@ -21,7 +22,10 @@ async def get_settings():
 
 
 @router.put("")
-async def update_settings(body: SettingsUpdate):
+async def update_settings(body: SettingsUpdate, identity: dict = Depends(require_admin)):
+    # Admin-only: dry_run_mode skips the gateway's approval requirement for
+    # every session, so a lower role must not be able to flip it — and this
+    # endpoint also writes provider API keys.
     values = {k: v for k, v in body.model_dump().items() if v is not None}
     if "active_provider" in values and values["active_provider"] not in CATALOG:
         raise HTTPException(400, f"unknown provider '{values['active_provider']}'")

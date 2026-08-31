@@ -1,9 +1,14 @@
 // Auth state for the local operator session.
 //
 // The backend enforces auth only once a PIN is configured, so `configured`
-// drives whether the UI shows a login gate at all. The token also lives in
-// localStorage: the httpOnly cookie covers same-origin fetches, but the
-// websocket helper needs to pass ?token= explicitly.
+// drives whether the UI shows a login gate at all.
+//
+// The session token is deliberately NOT stored in JS-reachable storage: the
+// httpOnly cookie set by the backend authenticates every same-origin fetch,
+// SSE stream and websocket on its own. Mirroring it into localStorage would
+// negate httpOnly, and putting it in a websocket query string would leak a
+// live credential into proxy and access logs. (The Bearer header the backend
+// also accepts is for non-browser clients such as the test suite and CLI.)
 
 import { create } from "zustand";
 import { api, ApiError } from "../api/client";
@@ -16,25 +21,6 @@ export interface AuthStatus {
   role: Role;
   roles: Role[];
   default_role: Role;
-}
-
-const TOKEN_KEY = "infra_copilot_token";
-
-export function storedToken(): string | null {
-  try {
-    return localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function setStoredToken(token: string | null): void {
-  try {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    // private mode / storage disabled — the cookie still covers fetches
-  }
 }
 
 interface AuthState {
@@ -66,17 +52,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   setup: async (pin, defaultRole) => {
-    const res = await api.post<{ token: string }>("/api/auth/setup", {
-      pin,
-      default_role: defaultRole,
-    });
-    setStoredToken(res.token);
+    await api.post("/api/auth/setup", { pin, default_role: defaultRole });
     await get().refresh();
   },
 
   login: async (pin) => {
-    const res = await api.post<{ token: string }>("/api/auth/login", { pin });
-    setStoredToken(res.token);
+    await api.post("/api/auth/login", { pin });
     await get().refresh();
   },
 
@@ -84,7 +65,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       await api.post("/api/auth/logout");
     } finally {
-      setStoredToken(null);
       await get().refresh();
     }
   },
@@ -95,7 +75,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   onUnauthorized: () => {
-    setStoredToken(null);
     const status = get().status;
     if (status) set({ status: { ...status, authenticated: false, role: "viewer" } });
   },

@@ -23,17 +23,6 @@ export function setUnauthorizedHandler(fn: () => void): void {
   onUnauthorized = fn;
 }
 
-/** Bearer header for the stored token. The httpOnly cookie already covers
- *  same-origin requests; this keeps things working if cookies are blocked. */
-export function authHeaders(): Record<string, string> {
-  try {
-    const token = localStorage.getItem("infra_copilot_token");
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  } catch {
-    return {};
-  }
-}
-
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
@@ -42,7 +31,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       credentials: "same-origin",
       headers: {
         "Content-Type": "application/json",
-        ...authHeaders(),
         ...(init?.headers as Record<string, string> | undefined),
       },
     });
