@@ -157,3 +157,56 @@ def test_redaction_masks_secret_keys():
     assert red["env"]["PGDATA"] == "/data"
     assert red["api_key"] == "***REDACTED***"
     assert red["items"][0]["token"] == "***REDACTED***"
+
+
+# --- audit fidelity: a tool that RETURNS an error did not "execute" ----------
+#
+# MCP tools report failure by returning {"error": true, ...} rather than
+# raising, so the gateway's exception handler never sees them. Recording those
+# as "executed" makes the audit log — the security record — claim an action
+# took effect when it did not. Found live on 2026-08-31: docker refused to
+# remove a running container (409) and the row still read "executed".
+
+async def test_error_dict_result_is_audited_as_failed(session_id):
+    args = {"container": "c1"}
+    await add_approval(session_id, tool="remove_container", args=args, call_id="call_err")
+
+    async def failing(_args):
+        return {"error": True, "type": "APIError", "message": "container is running"}
+
+    ctx = FakeCtx(session_id, approved=True, call_id="call_err")
+    res = await gateway.execute(ctx, "docker", "remove_container", args, failing)
+
+    assert res["error"] is True
+    action = await last_action("remove_container")
+    assert action.status == "failed", "a tool returning an error must not be audited as executed"
+    assert "container is running" in (action.error or "")
+
+
+async def test_successful_result_is_still_audited_as_executed(session_id):
+    args = {"image": "nginx"}
+    await add_approval(session_id, args=args, call_id="call_ok")
+    ctx = FakeCtx(session_id, approved=True, call_id="call_ok")
+    await gateway.execute(ctx, "docker", "run_container", args, make_executor([]))
+    assert (await last_action("run_container")).status == "executed"
+
+
+async def test_dry_run_result_is_not_reclassified_as_failed(session_id):
+    """A dry-run preview is not an error even if it reports what would fail."""
+    from app.services.settings_store import store as _store
+
+    args = {"image": "nginx"}
+    ctx = FakeCtx(session_id, approved=False, call_id="call_dry")
+
+    async def preview(_args):
+        return {"dry_run": True, "would_run": "nginx"}
+
+    import pytest as _pytest
+
+    mp = _pytest.MonkeyPatch()
+    mp.setattr(type(_store), "dry_run_mode", property(lambda self: True))
+    try:
+        await gateway.execute(ctx, "docker", "run_container", args, preview)
+    finally:
+        mp.undo()
+    assert (await last_action("run_container")).status == "dry_run"

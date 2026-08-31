@@ -138,6 +138,13 @@ class ToolGateway:
         try:
             result = await asyncio.wait_for(executor(effective_args), timeout=actual_timeout)
             result = redact(result) if isinstance(result, (dict, list)) else result
+            # MCP tools signal failure by RETURNING {"error": true, ...} rather
+            # than raising, so the except clauses below never see them. Auditing
+            # those as "executed" would make the security record claim an action
+            # took effect when it did not.
+            if status != "dry_run" and isinstance(result, dict) and result.get("error"):
+                status = "failed"
+                error = str(result.get("message") or result.get("type") or "tool reported an error")
             return result
         except ApprovalRequired:
             raise
