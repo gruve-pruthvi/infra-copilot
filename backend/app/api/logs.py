@@ -6,6 +6,8 @@ import threading
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
+from ..api.ws import _ws_authorized
+
 router = APIRouter(tags=["logs"])
 log = logging.getLogger(__name__)
 
@@ -30,6 +32,8 @@ async def container_logs(container_id: str, tail: int = 500):
 @router.websocket("/ws/logs/{container_id}")
 async def tail_logs(ws: WebSocket, container_id: str):
     """Live `docker logs --follow` over a WebSocket, one line per message."""
+    if not await _ws_authorized(ws):
+        return
     await ws.accept()
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=2000)

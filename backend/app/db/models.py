@@ -33,6 +33,9 @@ class ChatSession(Base):
     agent_history: Mapped[str | None] = mapped_column(Text, default=None)
     # JSON list of tool_call_ids the paused run is waiting on (null unless awaiting_approval)
     pending_call_ids: Mapped[str | None] = mapped_column(Text, default=None)
+    # Authorization ceiling captured from the request that started the turn.
+    # Persisted so a run resumed after approval keeps the same ceiling.
+    role: Mapped[str] = mapped_column(default="viewer")
 
 
 class Message(Base):
@@ -85,6 +88,21 @@ class Approval(Base):
     confirm_text: Mapped[str | None] = mapped_column(default=None)
     reject_reason: Mapped[str | None] = mapped_column(default=None)
     consumed_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
+class AuthSession(Base):
+    """A logged-in local operator session. Only the token HASH is stored."""
+
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[str] = mapped_column(primary_key=True, default=_uuid)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    token_hash: Mapped[str] = mapped_column(index=True, unique=True)
+    role: Mapped[str] = mapped_column(default="viewer")
+    expires_at: Mapped[datetime] = mapped_column()
+    # Temporary admin elevation (PIN re-entry), independent of the base role.
+    elevated_until: Mapped[datetime | None] = mapped_column(default=None)
+    last_seen_at: Mapped[datetime | None] = mapped_column(default=None)
 
 
 class Setting(Base):

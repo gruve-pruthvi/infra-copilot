@@ -23,8 +23,10 @@ from app.tools.gateway import args_hash, gateway, redact
 class FakeCtx:
     """Duck-typed RunContext — only the fields the gateway reads."""
 
-    def __init__(self, session_id: str, approved: bool = False, call_id: str = "call_1"):
-        self.deps = RunDeps(session_id=session_id)
+    def __init__(self, session_id: str, approved: bool = False, call_id: str = "call_1", role: str = "admin"):
+        # Role defaults to admin here: these tests isolate the *approval* gate.
+        # The role ceiling is a separate gate, covered in tests/test_roles.py.
+        self.deps = RunDeps(session_id=session_id, role=role)
         self.tool_call_approved = approved
         self.tool_call_id = call_id
 

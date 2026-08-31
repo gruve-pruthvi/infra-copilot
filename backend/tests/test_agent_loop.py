@@ -25,7 +25,7 @@ def make_agent(call_tools: list[str]) -> Agent:
 @pytest.mark.anyio
 async def test_read_tool_roundtrip_via_mcp(session_id):
     agent = make_agent(["list_containers"])
-    result = await agent.run("list containers", deps=RunDeps(session_id=session_id))
+    result = await agent.run("list containers", deps=RunDeps(session_id=session_id, role="admin"))
     # TestModel echoes tool results into its final output
     assert not isinstance(result.output, DeferredToolRequests)
     msgs = result.all_messages()
@@ -36,7 +36,7 @@ async def test_read_tool_roundtrip_via_mcp(session_id):
 @pytest.mark.anyio
 async def test_mutating_tool_pauses_via_mcp(session_id):
     agent = make_agent(["stop_container"])
-    result = await agent.run("stop something", deps=RunDeps(session_id=session_id))
+    result = await agent.run("stop something", deps=RunDeps(session_id=session_id, role="admin"))
     assert isinstance(result.output, DeferredToolRequests)
     assert result.output.approvals, "expected an approval-required tool call"
     assert result.output.approvals[0].tool_name == "stop_container"

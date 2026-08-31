@@ -49,6 +49,12 @@ SAFETY: dict[str, Tier] = {
     "docker.prune_images": Tier.DESTRUCTIVE,
     "docker.prune_volumes": Tier.DESTRUCTIVE,
     "docker.compose_down": Tier.DESTRUCTIVE,
+    # docker — backup / restore
+    "docker.list_backups": Tier.READ,
+    "docker.backup_volume": Tier.MUTATING,
+    "docker.pg_dump_database": Tier.MUTATING,
+    "docker.restore_volume": Tier.DESTRUCTIVE,       # overwrites live volume data
+    "docker.pg_restore_database": Tier.DESTRUCTIVE,  # overwrites live database objects
     # k8s — read-only in MVP
     "k8s.list_contexts": Tier.READ,
     "k8s.list_namespaces": Tier.READ,
@@ -92,6 +98,10 @@ TIMEOUTS: dict[str, float] = {
     "docker.pull_image": 600.0,
     "docker.compose_up": 600.0,
     "docker.compose_down": 300.0,
+    "docker.backup_volume": 900.0,
+    "docker.restore_volume": 900.0,
+    "docker.pg_dump_database": 900.0,
+    "docker.pg_restore_database": 900.0,
 }
 
 

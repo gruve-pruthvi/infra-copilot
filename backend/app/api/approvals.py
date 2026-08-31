@@ -11,8 +11,33 @@ from ..agents.run_manager import run_manager
 from ..db.database import get_db
 from ..db.models import Approval
 from ..schemas.api import ApprovalDecision
+from ..tools.classification import Tier
+from ..tools.roles import allows
+from .auth import current_identity
 
 router = APIRouter(prefix="/api/approvals", tags=["approvals"])
+
+
+async def _assert_may_approve(approval_id: str, role: str) -> None:
+    """A caller may only approve what their own role could execute.
+
+    Rejecting is always allowed — refusing an action needs no privilege.
+    Without this the UI could hand a viewer an approve button whose effect the
+    gateway would then refuse anyway; failing here gives a clearer error.
+    """
+    from ..db.database import session_factory
+
+    async with session_factory() as db:
+        row = await db.get(Approval, approval_id)
+    if row is None:
+        raise HTTPException(404, "approval not found")
+    try:
+        tier = Tier(row.tier)
+    except ValueError:
+        tier = Tier.DESTRUCTIVE  # unknown tier string fails closed
+    if not allows(role, tier):
+        raise HTTPException(
+            403, f"role '{role}' may not approve {tier.value} actions — elevate first")
 
 
 @router.get("")
@@ -40,7 +65,9 @@ async def list_approvals(status: str = "pending", db: AsyncSession = Depends(get
 
 
 @router.post("/{approval_id}/approve")
-async def approve(approval_id: str, body: ApprovalDecision):
+async def approve(approval_id: str, body: ApprovalDecision,
+                  identity: dict = Depends(current_identity)):
+    await _assert_may_approve(approval_id, identity["role"])
     try:
         return await run_manager.resolve_approval(approval_id, approved=True, confirm_text=body.confirm_text)
     except KeyError:
@@ -67,7 +94,7 @@ class BatchDecisions(BaseModel):
 
 
 @router.post("/batch")
-async def resolve_batch(body: BatchDecisions):
+async def resolve_batch(body: BatchDecisions, identity: dict = Depends(current_identity)):
     """Resolve several approvals in one call. `RunManager.resolve_approval`
     already defers resume until the last sibling of a session is resolved, so
     this is just a loop — the run resumes exactly once, on whichever call
@@ -89,9 +116,13 @@ async def resolve_batch(body: BatchDecisions):
         if aid in results:
             continue
         try:
+            # Per-item, not a raise: one forbidden id must not abort the batch.
+            await _assert_may_approve(aid, identity["role"])
             r = await run_manager.resolve_approval(aid, approved=True, confirm_text=body.confirm_texts.get(aid))
             resumed = resumed or bool(r.get("resumed"))
             results[aid] = {"ok": True, **r}
+        except HTTPException as e:
+            results[aid] = {"ok": False, "error": e.detail}
         except KeyError:
             results[aid] = {"ok": False, "error": "not found"}
         except ValueError as e:

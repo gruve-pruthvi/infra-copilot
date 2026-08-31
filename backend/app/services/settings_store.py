@@ -11,7 +11,7 @@ from sqlalchemy import select
 from ..db.database import session_factory
 from ..db.models import Setting
 
-SECRET_KEYS = {"anthropic_api_key", "openai_api_key", "google_api_key"}
+SECRET_KEYS = {"anthropic_api_key", "openai_api_key", "google_api_key", "auth_pin_hash"}
 
 DEFAULTS = {
     "active_provider": "anthropic",
@@ -20,6 +20,9 @@ DEFAULTS = {
     "anthropic_api_key": "",
     "openai_api_key": "",
     "google_api_key": "",
+    # Local auth. Empty pin hash == auth not configured == enforcement off.
+    "auth_pin_hash": "",
+    "auth_default_role": "admin",
 }
 
 

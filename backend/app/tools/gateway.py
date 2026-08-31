@@ -33,6 +33,7 @@ from ..services import progress
 from ..services.event_bus import bus
 from ..services.settings_store import store
 from .classification import Tier, classify, timeout_for
+from .roles import allows, normalize_role
 
 SECRET_KEY_RE = re.compile(r"(?i)(password|secret|token|api_key|apikey|access_key|private_key)")
 
@@ -85,8 +86,22 @@ class ToolGateway:
         """
         tier = classify(server, tool)
         session_id = getattr(ctx.deps, "session_id", None)
+        role = normalize_role(getattr(ctx.deps, "role", None))
         approval_id: str | None = None
         effective_args = dict(args)
+
+        # Role ceiling: checked BEFORE the approval machinery, so an
+        # under-privileged operator gets a straight refusal instead of an
+        # approval card they could never legitimately satisfy. Global dry-run
+        # does not bypass this — dry-run relaxes *approval*, not authorization.
+        if not allows(role, tier):
+            msg = (f"role '{role}' may not run {tier.value} tools "
+                   f"({server}.{tool}) — elevate to a higher role first")
+            await self._audit(
+                session_id=session_id, server=server, tool=tool, tier=tier, args=args,
+                status="denied", result=None, error=msg, duration_ms=0, approval_id=None,
+            )
+            return {"error": True, "denied": True, "message": msg}
 
         if tier is not Tier.READ:
             if store.dry_run_mode:

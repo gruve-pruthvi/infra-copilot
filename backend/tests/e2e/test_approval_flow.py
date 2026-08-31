@@ -65,7 +65,7 @@ async def test_approve_resumes_and_executes(session_id, patched_run_manager):
     rm = patched_run_manager
     queue = rm.broadcaster(session_id).subscribe()
 
-    await rm.start_turn(session_id, "stop the idle container")
+    await rm.start_turn(session_id, "stop the idle container", role="admin")
     events = await _drain_until(queue, {"turn_paused", "done", "error"})
     assert events[-1]["type"] == "turn_paused", events
 
@@ -106,7 +106,7 @@ async def test_reject_resumes_with_denial(session_id, patched_run_manager):
     rm = patched_run_manager
     queue = rm.broadcaster(session_id).subscribe()
 
-    await rm.start_turn(session_id, "stop the idle container")
+    await rm.start_turn(session_id, "stop the idle container", role="admin")
     events = await _drain_until(queue, {"turn_paused", "done", "error"})
     approval = next(e for e in events if e["type"] == "approval_required")["approval"]
 
@@ -136,7 +136,7 @@ async def test_resolve_approval_resumes_once_for_last_sibling(session_id, monkey
     rm = _install_fake_agent(monkeypatch, call_tools=["stop_container", "restart_container"])
     queue = rm.broadcaster(session_id).subscribe()
 
-    await rm.start_turn(session_id, "stop and restart seed-nginx")
+    await rm.start_turn(session_id, "stop and restart seed-nginx", role="admin")
     events = await _drain_until(queue, {"turn_paused", "done", "error"})
     assert events[-1]["type"] == "turn_paused", events
 
@@ -164,7 +164,7 @@ async def test_batch_endpoint_resolves_and_resumes_once(session_id, monkeypatch)
     _install_fake_agent(monkeypatch, call_tools=["stop_container", "restart_container"])
 
     queue = rm.run_manager.broadcaster(session_id).subscribe()
-    await rm.run_manager.start_turn(session_id, "stop and restart seed-nginx")
+    await rm.run_manager.start_turn(session_id, "stop and restart seed-nginx", role="admin")
     events = await _drain_until(queue, {"turn_paused", "done", "error"})
     assert events[-1]["type"] == "turn_paused", events
 
@@ -224,7 +224,7 @@ async def test_batch_endpoint_reject_wins_if_id_in_both(session_id, monkeypatch)
     _install_fake_agent(monkeypatch, call_tools=["stop_container"])
 
     queue = rm.run_manager.broadcaster(session_id).subscribe()
-    await rm.run_manager.start_turn(session_id, "stop the idle container")
+    await rm.run_manager.start_turn(session_id, "stop the idle container", role="admin")
     events = await _drain_until(queue, {"turn_paused", "done", "error"})
     assert events[-1]["type"] == "turn_paused", events
 
@@ -274,13 +274,13 @@ async def test_new_message_auto_rejects_pending(session_id, monkeypatch):
     _install_fake_agent(monkeypatch, call_tools=["stop_container"])
     queue = rm.run_manager.broadcaster(session_id).subscribe()
 
-    await rm.run_manager.start_turn(session_id, "stop seed-nginx")
+    await rm.run_manager.start_turn(session_id, "stop seed-nginx", role="admin")
     events = await _drain_until(queue, {"turn_paused", "done", "error"})
     assert events[-1]["type"] == "turn_paused", events
     approval_id = next(e["approval"]["id"] for e in events if e["type"] == "approval_required")
 
     # New message instead of resolving the approval — must NOT raise.
-    await rm.run_manager.start_turn(session_id, "actually, never mind — just list containers")
+    await rm.run_manager.start_turn(session_id, "actually, never mind — just list containers", role="admin")
     events2 = await _drain_until(queue, {"turn_paused", "done", "error"})
     assert events2[-1]["type"] == "done", events2
 

@@ -626,5 +626,201 @@ def compose_down(project_dir: str, file: str | None = None, remove_volumes: bool
         return _err(e)
 
 
+# --- Backup & restore --------------------------------------------------------
+#
+# Archives live under ~/.infra-copilot/workspace/backups. Every caller-supplied
+# archive name goes through _resolve_backup(), which pins it inside that
+# directory — a name is a NAME, never a path. Volume backup/restore runs a
+# throwaway alpine container with the volume mounted, so it works for volumes
+# whose owning container is stopped.
+
+BACKUP_IMAGE = "alpine:3.20"
+
+
+def _backup_dir() -> Path:
+    root = Path.home() / ".infra-copilot" / "workspace" / "backups"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _resolve_backup(name: str) -> Path:
+    """Resolve an archive name inside the backup dir. Raises on any escape."""
+    root = _backup_dir().resolve()
+    candidate = (root / name).resolve()
+    if candidate == root or not candidate.is_relative_to(root):
+        raise ValueError(f"unsafe backup name: {name!r}")
+    return candidate
+
+
+def _backup_name(volume: str) -> str:
+    safe = "".join(ch if (ch.isalnum() or ch in "-_.") else "-" for ch in volume).strip("-.") or "volume"
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"{safe}-{ts}.tar.gz"
+
+
+def _run_helper(binds: dict, command: list[str]) -> tuple[int, str]:
+    """Run a throwaway alpine container to completion; return (exit_code, logs)."""
+    c = _docker().containers.run(
+        BACKUP_IMAGE, command=command, volumes=binds,
+        remove=False, detach=True, network_disabled=True,
+    )
+    try:
+        res = c.wait(timeout=600)
+        logs = c.logs().decode(errors="replace")[-8000:]
+        return int(res.get("StatusCode", 1)), logs
+    finally:
+        try:
+            c.remove(force=True)
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            pass
+
+
+@mcp.tool(annotations=READ_ONLY)
+def list_backups() -> dict:
+    """List backup archives available for restore."""
+    try:
+        root = _backup_dir()
+        out = []
+        for f in sorted(root.iterdir(), key=lambda p: p.name):
+            if f.is_file():
+                st = f.stat()
+                out.append({"name": f.name, "size_bytes": st.st_size,
+                            "modified": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat()})
+        return {"backups": out, "directory": str(root)}
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+
+
+@mcp.tool(annotations=MUTATING)
+def backup_volume(volume: str, dry_run: bool = False) -> dict:
+    """Snapshot a named Docker volume into a .tar.gz archive in the backup directory."""
+    archive = _backup_name(volume)
+    if dry_run:
+        return {"dry_run": True, "would": "backup_volume", "volume": volume, "archive": archive}
+    try:
+        dest = _resolve_backup(archive)
+    except ValueError as e:
+        return {"error": True, "type": "UnsafePath", "message": str(e)}
+    try:
+        _docker().volumes.get(volume)  # fail early with a clear message
+        code, logs = _run_helper(
+            {volume: {"bind": "/data", "mode": "ro"},
+             str(dest.parent): {"bind": "/backup", "mode": "rw"}},
+            ["sh", "-c", f"cd /data && tar czf /backup/{dest.name} ."],
+        )
+        if code != 0:
+            return {"error": True, "type": "BackupFailed", "message": logs or f"exit {code}"}
+        return {"volume": volume, "archive": dest.name, "path": str(dest),
+                "size_bytes": dest.stat().st_size if dest.exists() else 0}
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+
+
+@mcp.tool(annotations=DESTRUCTIVE)
+def restore_volume(volume: str, archive: str, dry_run: bool = False) -> dict:
+    """Restore an archive into a named volume. OVERWRITES the volume's current contents."""
+    try:
+        src = _resolve_backup(archive)
+    except ValueError as e:
+        return {"error": True, "type": "UnsafePath", "message": str(e)}
+    if not src.is_file():
+        return {"error": True, "type": "BackupNotFound",
+                "message": f"no such archive: {archive}. Use list_backups to see what exists."}
+    if dry_run:
+        return {"dry_run": True, "would": "restore_volume", "volume": volume,
+                "archive": src.name, "warning": "overwrites all current contents of the volume"}
+    try:
+        try:
+            _docker().volumes.get(volume)
+        except docker.errors.NotFound:
+            _docker().volumes.create(volume)
+        code, logs = _run_helper(
+            {volume: {"bind": "/data", "mode": "rw"},
+             str(src.parent): {"bind": "/backup", "mode": "ro"}},
+            ["sh", "-c", f"rm -rf /data/* /data/..?* /data/.[!.]* 2>/dev/null; tar xzf /backup/{src.name} -C /data"],
+        )
+        if code != 0:
+            return {"error": True, "type": "RestoreFailed", "message": logs or f"exit {code}"}
+        return {"restored_volume": volume, "from_archive": src.name}
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+
+
+@mcp.tool(annotations=MUTATING)
+def pg_dump_database(container: str, database: str, user: str = "postgres",
+                     password: str | None = None, dry_run: bool = False) -> dict:
+    """Logical backup of a PostgreSQL database running in a container (pg_dump -> .sql in the backup dir).
+
+    The password is used only to build the in-container environment; it is never
+    returned in the result."""
+    archive = _backup_name(f"{database}-pgdump").replace(".tar.gz", ".sql")
+    if dry_run:
+        return {"dry_run": True, "would": "pg_dump", "container": container,
+                "database": database, "user": user, "archive": archive}
+    try:
+        dest = _resolve_backup(archive)
+    except ValueError as e:
+        return {"error": True, "type": "UnsafePath", "message": str(e)}
+    try:
+        c = _docker().containers.get(container)
+        env = {"PGPASSWORD": password} if password else None
+        exit_code, output = c.exec_run(
+            ["pg_dump", "-U", user, "-d", database], environment=env, demux=False)
+        if exit_code != 0:
+            return {"error": True, "type": "PgDumpFailed",
+                    "message": (output or b"").decode(errors="replace")[-4000:]}
+        dest.write_bytes(output or b"")
+        return {"container": c.name, "database": database, "archive": dest.name,
+                "path": str(dest), "size_bytes": dest.stat().st_size}
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+
+
+@mcp.tool(annotations=DESTRUCTIVE)
+def pg_restore_database(container: str, database: str, archive: str, user: str = "postgres",
+                        password: str | None = None, dry_run: bool = False) -> dict:
+    """Replay a .sql dump into a PostgreSQL container. OVERWRITES existing objects."""
+    try:
+        src = _resolve_backup(archive)
+    except ValueError as e:
+        return {"error": True, "type": "UnsafePath", "message": str(e)}
+    if not src.is_file():
+        return {"error": True, "type": "BackupNotFound", "message": f"no such archive: {archive}"}
+    if dry_run:
+        return {"dry_run": True, "would": "pg_restore", "container": container,
+                "database": database, "archive": src.name,
+                "warning": "replays SQL into the live database, overwriting existing objects"}
+    try:
+        c = _docker().containers.get(container)
+        env = {"PGPASSWORD": password} if password else None
+        sql = src.read_bytes()
+        exec_id = _docker().api.exec_create(
+            c.id, ["psql", "-U", user, "-d", database], stdin=True, environment=env)
+        sock = _docker().api.exec_start(exec_id["Id"], socket=True)
+        try:
+            raw = getattr(sock, "_sock", sock)
+            raw.sendall(sql)
+            try:
+                raw.shutdown(1)  # SHUT_WR — signal EOF to psql
+            except OSError:
+                pass
+            out = b""
+            while chunk := raw.recv(4096):
+                out += chunk
+        finally:
+            try:
+                sock.close()
+            except Exception:  # noqa: BLE001
+                pass
+        info = _docker().api.exec_inspect(exec_id["Id"])
+        code = info.get("ExitCode")
+        if code not in (0, None):
+            return {"error": True, "type": "PgRestoreFailed",
+                    "message": out.decode(errors="replace")[-4000:]}
+        return {"container": c.name, "database": database, "restored_from": src.name}
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")

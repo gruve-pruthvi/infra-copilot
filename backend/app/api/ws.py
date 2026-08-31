@@ -6,16 +6,36 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from ..services import auth
 from ..services.event_bus import bus
 from ..services.monitor import monitor
 
 router = APIRouter(tags=["ws"])
 log = logging.getLogger(__name__)
 
+WS_UNAUTHORIZED = 4401  # application close code the frontend maps to "log in"
+
+
+async def _ws_authorized(ws: WebSocket) -> bool:
+    """Validate the auth cookie (or ?token=) at handshake.
+
+    A router dependency can't 401 a websocket, so the check lives here: reject
+    before accept() when a PIN is configured and no valid token is presented.
+    """
+    if not auth.auth_required():
+        return True
+    token = ws.cookies.get(auth.COOKIE_NAME) or ws.query_params.get("token")
+    if await auth.resolve_token(token) is not None:
+        return True
+    await ws.close(code=WS_UNAUTHORIZED, reason="Authentication required")
+    return False
+
 
 @router.websocket("/ws/events")
 async def events(ws: WebSocket):
     """Multiplexed live-update channel: {topic, payload} frames."""
+    if not await _ws_authorized(ws):
+        return
     await ws.accept()
     queue = bus.subscribe()
     try:

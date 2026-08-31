@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from ..agents.run_manager import TERMINAL_EVENTS, run_manager
+from .auth import current_identity
 from ..schemas.api import MessageIn
 
 router = APIRouter(prefix="/api/sessions", tags=["chat"])
@@ -36,11 +37,11 @@ async def _drain(queue: asyncio.Queue, broadcaster, *, follow_only: bool = False
 
 
 @router.post("/{session_id}/messages")
-async def send_message(session_id: str, body: MessageIn):
+async def send_message(session_id: str, body: MessageIn, identity: dict = Depends(current_identity)):
     bcast = run_manager.broadcaster(session_id)
     queue = bcast.subscribe()
     try:
-        await run_manager.start_turn(session_id, body.content)
+        await run_manager.start_turn(session_id, body.content, role=identity["role"])
     except KeyError:
         bcast.unsubscribe(queue)
         raise HTTPException(404, "session not found")

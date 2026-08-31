@@ -38,6 +38,7 @@ from ..services.event_bus import bus
 from ..tools.classification import SAFETY, Tier
 from ..tools.gateway import args_hash, redact
 from .copilot import build_agent
+from ..tools.roles import normalize_role
 from .deps import RunDeps
 from .history import trim_history
 
@@ -106,7 +107,7 @@ class RunManager:
 
     # -- public entry points -------------------------------------------------
 
-    async def start_turn(self, session_id: str, user_text: str) -> None:
+    async def start_turn(self, session_id: str, user_text: str, *, role: str) -> None:
         """Persist the user message and launch the agent turn.
 
         If the session is `awaiting_approval`, the pending approvals are
@@ -123,6 +124,8 @@ class RunManager:
             if sess is None:
                 raise KeyError("session not found")
             was_awaiting_approval = sess.status == "awaiting_approval"
+            # Capture the caller's ceiling for this turn (and any resume of it).
+            sess.role = normalize_role(role)
             db.add(Message(session_id=session_id, role="user", content=user_text))
             if sess.title == "New session":
                 sess.title = user_text[:60]
@@ -272,7 +275,7 @@ class RunManager:
                 user_prompt,
                 message_history=history,
                 deferred_tool_results=deferred_results,
-                deps=RunDeps(session_id=session_id),
+                deps=RunDeps(session_id=session_id, role=await self._role_for(session_id)),
                 event_stream_handler=event_stream_handler,
                 model_settings=model_settings,
                 usage_limits=usage_limits,
@@ -423,6 +426,12 @@ class RunManager:
                 await db.commit()
         bus.publish("session_status", {"session_id": session_id, "status": status})
         self.broadcaster(session_id).emit({"type": "status", "status": status})
+
+    async def _role_for(self, session_id: str) -> str:
+        """The ceiling recorded when this turn started. Fails closed to viewer."""
+        async with session_factory() as db:
+            sess = await db.get(ChatSession, session_id)
+            return normalize_role(getattr(sess, "role", None) if sess else None)
 
     async def _load_history(self, session_id: str):
         async with session_factory() as db:
