@@ -1,6 +1,7 @@
 # Project Status & Roadmap
 
-> Last updated: 2026-08-31 · Companion to the vision document at
+> Last updated: 2026-08-31 · Test & verification procedures live in
+> [`TESTING.md`](TESTING.md) · Companion to the vision document at
 > [`docs/Local AI Infrastructure Control Platform.md`](docs/Local%20AI%20Infrastructure%20Control%20Platform.md)
 > and the README quickstart.
 

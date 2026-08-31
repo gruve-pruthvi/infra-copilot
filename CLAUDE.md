@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A local AI infrastructure control platform: chat with an LLM agent that controls Docker / inspects Kubernetes, with a plan-before-execute safety model where every mutating action requires server-side approval. Vision doc in `docs/`, current status and roadmap in `PROJECT_STATUS.md` (keep it updated when completing roadmap items).
+A local AI infrastructure control platform: chat with an LLM agent that controls Docker / inspects Kubernetes, with a plan-before-execute safety model where every mutating action requires server-side approval. Vision doc in `docs/`, current status and roadmap in `PROJECT_STATUS.md` (keep it updated when completing roadmap items), full test & verification procedures in `TESTING.md`.
 
 ## Commands
 
