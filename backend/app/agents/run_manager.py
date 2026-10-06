@@ -62,6 +62,18 @@ def _server_for_tool(tool: str) -> str:
     return "unknown"
 
 
+def _first_string_arg(args: dict[str, Any]) -> str | None:
+    """First non-empty string arg value — the resource name a destructive
+    approval's typed confirmation must match. Mirrors the frontend's
+    `firstStringArg` (frontend/src/lib/format.ts) so the UI hint and the
+    server-side guarantee agree on the same value.
+    """
+    for v in args.values():
+        if isinstance(v, str) and v:
+            return v
+    return None
+
+
 class Broadcaster:
     def __init__(self) -> None:
         self._queues: set[asyncio.Queue] = set()
@@ -162,8 +174,12 @@ class RunManager:
                 row.status = "expired"
                 await db.commit()
                 raise ValueError("approval has expired — reject it and ask again")
-            if approved and row.tier == "destructive" and not (confirm_text or "").strip():
-                raise ValueError("destructive actions require typing the resource name to confirm")
+            if approved and row.tier == "destructive":
+                expected = _first_string_arg(json.loads(row.args or "{}"))
+                if not (confirm_text or "").strip():
+                    raise ValueError("destructive actions require typing the resource name to confirm")
+                if expected is not None and confirm_text != expected:
+                    raise ValueError("typed confirmation does not match the resource name")
             row.status = "approved" if approved else "rejected"
             row.resolved_at = now
             row.confirm_text = confirm_text

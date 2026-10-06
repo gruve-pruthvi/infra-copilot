@@ -260,6 +260,37 @@ async def test_batch_endpoint_reject_wins_if_id_in_both(session_id, monkeypatch)
         assert actions == [], "rejected tool must never be executed even if id is in both lists"
 
 
+async def test_destructive_approve_rejects_wrong_confirm_text(session_id, monkeypatch):
+    """A destructive approval must match the typed confirmation against the
+    resource name, not just require *some* non-empty text. Server-side
+    guarantee mirroring the frontend's `firstStringArg` hint (regression for
+    a gap where any non-empty confirm_text was accepted).
+    """
+    rm = _install_fake_agent(monkeypatch, call_tools=["remove_container"])
+    queue = rm.broadcaster(session_id).subscribe()
+
+    await rm.start_turn(session_id, "remove the idle container", role="admin")
+    events = await _drain_until(queue, {"turn_paused", "done", "error"})
+    assert events[-1]["type"] == "turn_paused", events
+
+    approval = next(e for e in events if e["type"] == "approval_required")["approval"]
+    assert approval["tier"] == "destructive"
+    expected = next(v for v in approval["args"].values() if isinstance(v, str) and v)
+
+    with pytest.raises(ValueError, match="does not match"):
+        await rm.resolve_approval(approval["id"], approved=True, confirm_text="definitely-wrong")
+
+    async with session_factory() as db:
+        row = await db.get(Approval, approval["id"])
+        assert row.status == "pending", "a mismatched confirmation must not consume the approval"
+
+    result = await rm.resolve_approval(approval["id"], approved=True, confirm_text=expected)
+    assert result["resumed"] is True
+
+    events2 = await _drain_until(queue, {"done", "error"})
+    assert events2[-1]["type"] == "done", events2
+
+
 async def test_new_message_auto_rejects_pending(session_id, monkeypatch):
     """A new user message while a turn is `awaiting_approval` must not 409. Instead,
     the pending approval(s) are auto-rejected ("superseded by a new user message")

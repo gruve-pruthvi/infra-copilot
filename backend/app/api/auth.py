@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
+from starlette.requests import HTTPConnection
 
 from ..services import auth
 from ..services.settings_store import store
@@ -27,22 +28,27 @@ class PinBody(BaseModel):
     pin: str
 
 
-def _token_from(request: Request) -> str | None:
-    header = request.headers.get("Authorization", "")
+def _token_from(conn: HTTPConnection) -> str | None:
+    header = conn.headers.get("Authorization", "")
     if header.startswith("Bearer "):
         return header[7:].strip() or None
-    return request.cookies.get(auth.COOKIE_NAME)
+    return conn.cookies.get(auth.COOKIE_NAME)
 
 
-async def current_identity(request: Request) -> dict:
+async def current_identity(conn: HTTPConnection) -> dict:
     """Resolve the caller. Raises 401 when auth is on and the token is bad.
+
+    Takes the base `HTTPConnection` (not `Request`) so this also works as a
+    router-level dependency on routers that mix REST and WebSocket routes
+    (e.g. `logs.router`) — FastAPI can't satisfy a `Request`-typed dependency
+    for a websocket-scope route, only `HTTPConnection`/`WebSocket`.
 
     When no PIN is configured the install is open and the caller is treated as
     a local admin — identical to the pre-auth behaviour.
     """
     if not auth.auth_required():
         return {"authenticated": False, "role": "admin", "session": None, "enforced": False}
-    sess = await auth.resolve_token(_token_from(request))
+    sess = await auth.resolve_token(_token_from(conn))
     if sess is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     return {

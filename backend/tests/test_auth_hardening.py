@@ -69,6 +69,30 @@ def test_foreign_origins_rejected(evil):
     assert not ws_api._origin_allowed(evil, host="localhost:8000")
 
 
+# --- Finding: /ws/logs router-level auth dependency crashed every handshake --
+#
+# `logs.router` mixes a REST route and a WebSocket route under one
+# `dependencies=[Depends(require_auth)]` guard. `current_identity` originally
+# took a `Request`, which FastAPI cannot construct for a websocket-scope
+# connection — every `/ws/logs/{id}` handshake 500'd, PIN or no PIN. Fixed by
+# typing it on `HTTPConnection` (the base FastAPI resolves for both scopes).
+
+def test_ws_logs_handshake_does_not_500_when_open(clean):
+    from starlette.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    # No PIN configured (open install) — the dependency must resolve without
+    # raising, and the route itself must at least reach _ws_authorized rather
+    # than crashing in dependency resolution. It closes the socket right after
+    # because there's no real docker container named "does-not-exist", which
+    # is fine — we're only asserting the handshake doesn't blow up with a 500.
+    with client.websocket_connect("/ws/logs/does-not-exist") as ws:
+        msg = ws.receive_text()
+        assert "stream error" in msg or msg is not None
+
+
 def test_origin_check_applies_even_without_a_pin():
     """The drive-by case is precisely the no-PIN install — don't skip it."""
     assert not auth.auth_required()
