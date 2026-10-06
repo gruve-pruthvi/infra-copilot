@@ -163,6 +163,7 @@ clean; verified live against real Docker, a local kind cluster, and Gemini.
 | Local auth (PIN + session tokens) | ✅ | `backend/app/services/auth.py`, `backend/app/api/auth.py` |
 | Role boundaries (viewer/operator/admin) | ✅ | `backend/app/tools/roles.py`, enforced in `gateway.py` |
 | Frontend login gate + role badge + elevation | ✅ | `frontend/src/pages/LoginPage.tsx`, `components/RoleBadge.tsx` |
+| First-run PIN setup in the UI | ✅ | `SecuritySection` in `frontend/src/pages/SettingsPage.tsx` (the login gate alone could never show the setup form) |
 | Promote RCA / Cost to sub-agents | ⏸ deferred | Was always conditional on routing quality degrading. It has not: the live RCA run selected the right tool unaided. Revisit only if it does. |
 
 ### Auth & role model (as built)

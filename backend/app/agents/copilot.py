@@ -23,5 +23,8 @@ def build_agent() -> tuple[Agent[RunDeps, Any], dict[str, Any] | None]:
         instructions=SYSTEM_PROMPT,
         output_type=[str, DeferredToolRequests],
         toolsets=[*get_mcp_toolsets(), native_toolset],
+        # Providers (notably Gemini) occasionally return an empty response; the
+        # default budget of 1 turns that transient into a failed run.
+        retries={"output": 3},
     )
     return agent, model_settings

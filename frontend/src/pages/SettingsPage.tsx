@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "../api/client";
 import type { SettingsResponse, TestProviderResult } from "../api/types";
+import { useAuthStore, type Role } from "../stores/authStore";
 
 type ProviderKey = "anthropic" | "openai" | "google";
 const KEY_FIELDS: Record<ProviderKey, "anthropic_api_key" | "openai_api_key" | "google_api_key"> = {
@@ -14,6 +15,101 @@ const KEY_FIELDS: Record<ProviderKey, "anthropic_api_key" | "openai_api_key" | "
 interface TestState {
   busy: boolean;
   result: TestProviderResult | null;
+}
+
+// Auth is off on a fresh install; this is the only in-app way to turn it on.
+// The backend refuses /setup once a PIN exists, so changing it is out of scope.
+function SecuritySection() {
+  const status = useAuthStore((s) => s.status);
+  const setup = useAuthStore((s) => s.setup);
+  const [pin, setPin] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [role, setRole] = useState<Role>("operator");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!status) return null;
+
+  if (status.configured) {
+    return (
+      <section className="rounded border border-edge bg-panel p-4">
+        <h2 className="mb-1 text-sm font-medium text-fg">Security</h2>
+        <p className="text-xs text-dim">
+          PIN protection is on. Signed in as <span className="font-mono text-fg">{status.role}</span>.
+        </p>
+      </section>
+    );
+  }
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (pin.length < 4) return setError("PIN must be at least 4 characters");
+    if (pin !== confirm) return setError("PINs do not match");
+    setBusy(true);
+    try {
+      await setup(pin, role);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+      setPin("");
+      setConfirm("");
+    }
+  };
+
+  const field =
+    "w-40 rounded border border-edge bg-ink px-2.5 py-1.5 font-mono text-xs text-fg outline-none placeholder:text-faint focus:border-accent/50";
+
+  return (
+    <section className="rounded border border-edge bg-panel p-4">
+      <h2 className="mb-1 text-sm font-medium text-fg">Security</h2>
+      <p className="mb-3 text-xs text-dim">
+        No PIN is set, so anyone who can reach this backend has full access. Set one to require
+        sign-in and enforce roles.
+      </p>
+      <form onSubmit={(e) => void submit(e)} className="flex flex-wrap items-center gap-2">
+        <input
+          type="password"
+          value={pin}
+          onChange={(e) => setPin(e.target.value)}
+          placeholder="new PIN"
+          autoComplete="new-password"
+          aria-label="New PIN"
+          className={field}
+        />
+        <input
+          type="password"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          placeholder="confirm PIN"
+          autoComplete="new-password"
+          aria-label="Confirm PIN"
+          className={field}
+        />
+        <select
+          value={role}
+          onChange={(e) => setRole(e.target.value as Role)}
+          aria-label="Default role"
+          className="rounded border border-edge bg-panel px-2.5 py-1.5 font-mono text-xs text-fg outline-none focus:border-accent/50"
+        >
+          {status.roles.map((r) => (
+            <option key={r} value={r}>
+              default role: {r}
+            </option>
+          ))}
+        </select>
+        <button
+          type="submit"
+          disabled={busy}
+          className="rounded border border-accent/50 bg-accent/10 px-3 py-1.5 text-xs text-accent hover:bg-accent/20 disabled:opacity-50"
+        >
+          {busy ? "Setting…" : "Set PIN"}
+        </button>
+      </form>
+      {error && <p className="mt-2 font-mono text-xs text-danger">{error}</p>}
+    </section>
+  );
 }
 
 export function SettingsPage() {
@@ -201,6 +297,8 @@ export function SettingsPage() {
             </span>
           </label>
         </section>
+
+        <SecuritySection />
 
         <div className="flex items-center gap-3">
           <button
